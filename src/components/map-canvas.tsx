@@ -26,7 +26,14 @@ import {
 import { useAppStore } from "@/lib/store";
 import { cn, snapshotUrl } from "@/lib/utils";
 import { cinematicFit, cinematicFly, pitchForZoom, spyEase } from "@/lib/spy-cam";
+import { inspectCam, inspectZoomForKlass } from "@/lib/inspect-zoom";
+import type { DetectKlass } from "@/lib/imagery-detect";
 import { LookFx } from "@/components/sensor-fx";
+import { LOOK_RASTER, type LookId } from "@/lib/looks";
+import type { GevPin } from "@/lib/gev-world";
+import { useAnalysisArea } from "@/lib/analysis-area";
+import { useFreightState } from "@/lib/freight-state";
+import { useHazardState } from "@/lib/hazard-state";
 
 const PARTY_COLOR: Record<string, string> = {
   saf: "#7b93a6",
@@ -71,9 +78,11 @@ function thermalUrl(date: string): string {
   return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_Thermal_Anomalies_375m_All/default/${date}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`;
 }
 
-function vis(imagery: ImagerySource, id: "hls" | "viirs" | "s2cloudless" | "esri" | "gmaps" | "dark"): "visible" | "none" {
+function vis(imagery: ImagerySource, id: "hls" | "viirs" | "s2cloudless" | "esri" | "gmaps" | "dark" | "osm" | "night"): "visible" | "none" {
   if (id === "dark") return imagery === "dark" ? "visible" : "none";
   if (id === "gmaps") return imagery === "gmaps" ? "visible" : "none";
+  if (id === "osm") return imagery === "osm" ? "visible" : "none";
+  if (id === "night") return imagery === "night" ? "visible" : "none";
   if (id === "esri") return imagery === "hires" || imagery === "s2" || imagery === "viirs" ? "visible" : "none";
   if (id === "hls") return imagery === "s2" ? "visible" : "none";
   if (id === "viirs") return imagery === "viirs" ? "visible" : "none";
@@ -186,10 +195,28 @@ function baseStyle(date: string, imagery: ImagerySource): StyleSpecification {
         maxzoom: 16,
         attribution: "Sentinel-2 cloudless 2024 © EOX / Copernicus",
       },
+      osm: {
+        type: "raster",
+        tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
+        tileSize: 256,
+        maxzoom: 20,
+        attribution: "© OpenStreetMap contributors, © CARTO",
+      },
+      night: {
+        type: "raster",
+        tiles: [
+          "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+        ],
+        tileSize: 256,
+        maxzoom: 8,
+        attribution: "NASA Black Marble / VIIRS",
+      },
     },
     layers: [
       { id: "esri", type: "raster", source: "esri", layout: { visibility: vis(imagery, "esri") } },
       { id: "gmaps", type: "raster", source: "gmaps", layout: { visibility: vis(imagery, "gmaps") } },
+      { id: "osm", type: "raster", source: "osm", layout: { visibility: vis(imagery, "osm") } },
+      { id: "night", type: "raster", source: "night", layout: { visibility: vis(imagery, "night") } },
       {
         id: "dark",
         type: "raster",
@@ -315,6 +342,8 @@ function detectFc(hits: DetectHit[]): FC {
             body: h.body,
             color,
             siteId: h.siteId ?? "",
+            date: h.date,
+            klassId: h.klass,
           },
           geometry: { type: "Polygon" as const, coordinates: [ring] },
         },
@@ -327,12 +356,55 @@ function detectFc(hits: DetectHit[]): FC {
             body: h.body,
             color,
             siteId: h.siteId ?? "",
+            date: h.date,
+            klassId: h.klass,
           },
           geometry: { type: "Point" as const, coordinates: [h.lon, h.lat] },
         },
       ];
     }),
   };
+}
+
+function runSlew(
+  map: MlMap,
+  opts: { lon: number; lat: number; zoom: number; label?: string },
+) {
+  const go = () => {
+    try {
+      map.stop();
+    } catch {
+      /* optional */
+    }
+    cinematicFly(map, opts);
+  };
+  try {
+    const proj = (map as unknown as { getProjection?: () => { type?: string } }).getProjection?.();
+    if (proj?.type === "globe") {
+      map.setProjection({ type: "mercator" });
+      (map as unknown as { setFog?: (v: null) => void }).setFog?.(null);
+      window.setTimeout(go, 80);
+      return;
+    }
+  } catch {
+    /* globe optional */
+  }
+  go();
+}
+
+function slewFromProps(p: Record<string, unknown> | undefined, lat: number, lon: number, fallbackZoom = 15.4) {
+  const klass = typeof p?.klassId === "string" ? (p.klassId as DetectKlass) : undefined;
+  const date = typeof p?.date === "string" ? p.date : undefined;
+  const title = typeof p?.title === "string" ? p.title : typeof p?.name === "string" ? p.name : undefined;
+  useAppStore.getState().setFlyTarget(
+    inspectCam({
+      lat,
+      lon,
+      zoom: klass ? inspectZoomForKlass(klass) : fallbackZoom,
+      label: title,
+      date,
+    }),
+  );
 }
 
 function siteFc(partyOf: (id: string) => string, kindFilter = "all"): FC {
@@ -404,22 +476,46 @@ function StaticSatellite({
 }: {
   date: string; boxes: WatchBox[]; firms: ThermalEvent[]; flights: FlightEvent[]; onPick: (id: string) => void;
 }) {
-  const [src, setSrc] = useState(snapshotUrl(date, AOI));
-  useEffect(() => { setSrc(snapshotUrl(date, AOI)); }, [date]);
+  const [bbox, setBbox] = useState(AOI);
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ lat: number; lon: number; zoom?: number }>).detail;
+      if (!d || !Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+      const span = Math.max(0.014, 48 / 2 ** (d.zoom ?? 14));
+      setBbox({
+        west: d.lon - span,
+        south: d.lat - span * 0.72,
+        east: d.lon + span,
+        north: d.lat + span * 0.72,
+        center: [d.lon, d.lat],
+        zoom: d.zoom ?? 14,
+      });
+    };
+    window.addEventListener("ahsr-slew-to", on);
+    return () => window.removeEventListener("ahsr-slew-to", on);
+  }, []);
+  const [src, setSrc] = useState(snapshotUrl(date, bbox));
+  useEffect(() => {
+    setSrc(snapshotUrl(date, bbox, "HLS_L30_Nadir_BRDF_Adjusted_Reflectance", 768));
+  }, [date, bbox]);
   const partyOf = useAppStore((s) => s.partyOverrides);
+  const pin = (lat: number, lon: number) => ({
+    left: `${((lon - bbox.west) / (bbox.east - bbox.west)) * 100}%`,
+    top: `${((bbox.north - lat) / (bbox.north - bbox.south)) * 100}%`,
+  });
   return (
     <div className="absolute inset-0 overflow-hidden bg-bg">
-      <img src={src} alt="NASA VIIRS mosaic" className="h-full w-full object-cover" onError={() => setSrc("/sudan-viirs.jpg")} />
-      {firms.map((f) => (
-        <span key={f.id} className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-thermal" style={pct(f.lat, f.lon)} />
+      <img src={src} alt="Dated satellite browse" className="h-full w-full object-cover" onError={() => setSrc(snapshotUrl(date, bbox))} />
+      {firms.filter((f) => f.lon >= bbox.west && f.lon <= bbox.east).map((f) => (
+        <span key={f.id} className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-thermal" style={pin(f.lat, f.lon)} />
       ))}
-      {flights.map((f) => (
-        <span key={f.id} className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-bg bg-fg" style={pct(f.lat, f.lon)} />
+      {flights.filter((f) => f.lon >= bbox.west && f.lon <= bbox.east).map((f) => (
+        <span key={f.id} className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-bg bg-fg" style={pin(f.lat, f.lon)} />
       ))}
-      {SITES.map((s) => {
+      {SITES.filter((s) => s.lon >= bbox.west && s.lon <= bbox.east && s.lat >= bbox.south && s.lat <= bbox.north).map((s) => {
         const party = partyOf[s.id]?.party ?? s.party;
         return (
-          <button key={s.id} type="button" title={s.name} onClick={() => onPick(s.id)} className="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-bg" style={{ ...pct(s.lat, s.lon), background: PARTY_COLOR[party] ?? PARTY_COLOR.unknown }} />
+          <button key={s.id} type="button" title={s.name} onClick={() => onPick(s.id)} className="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-bg" style={{ ...pin(s.lat, s.lon), background: PARTY_COLOR[party] ?? PARTY_COLOR.unknown }} />
         );
       })}
     </div>
@@ -441,10 +537,14 @@ interface Props {
   annotations?: BriefAnno[];
   detections?: DetectHit[];
   fuae?: FuaeRecord[];
+  quakes?: GevPin[];
+  sats?: GevPin[];
+  eonet?: GevPin[];
+  launches?: GevPin[];
 }
 
 export function MapCanvas({
-  boxes, firms, flights, panelOpen = false, reports = [], newsPoints = [], aiEvents = [], gdelt = [], osm = [], vessels = [], briefingOn = false, annotations = [], detections = [], fuae = [],
+  boxes, firms, flights, panelOpen = false, reports = [], newsPoints = [], aiEvents = [], gdelt = [], osm = [], vessels = [], briefingOn = false, annotations = [], detections = [], fuae = [], quakes = [], sats = [], eonet = [], launches = [],
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -455,6 +555,7 @@ export function MapCanvas({
   const [engine, setEngine] = useState<"static" | "gl">("static");
   const [cursor, setCursor] = useState("—");
   const [mapReady, setMapReady] = useState(false);
+  const pendingSlew = useRef<{ lon: number; lat: number; zoom: number; label?: string } | null>(null);
   const layers = useAppStore((s) => s.layers);
   const imagery = useAppStore((s) => s.imagery);
   const date = useAppStore((s) => s.date);
@@ -474,6 +575,11 @@ export function MapCanvas({
   const detectOn = useAppStore((s) => s.detectOn);
   const orbitOn = useAppStore((s) => s.orbitOn);
   const setOrbitOn = useAppStore((s) => s.setOrbitOn);
+  const globeOn = useAppStore((s) => s.globeOn);
+  const look = useAppStore((s) => s.look);
+  const analysisOverlay = useAnalysisArea((s) => s.overlay);
+  const freightHits = useFreightState((s) => s.hits);
+  const hazardFeed = useHazardState((s) => s.feed);
 
   useEffect(() => {
     if (!host.current) return;
@@ -484,6 +590,7 @@ export function MapCanvas({
     let onFit: ((ev: Event) => void) | null = null;
     let onMeasure: (() => void) | null = null;
     let onNudge: ((ev: Event) => void) | null = null;
+    let onSlewTo: ((ev: Event) => void) | null = null;
 
     void import("maplibre-gl").then((maplibregl) => {
       if (cancelled || !host.current) return;
@@ -507,6 +614,25 @@ export function MapCanvas({
       map.addControl(new ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
       map.setPadding(hudPad(false));
       mapRef.current = map;
+      (window as unknown as { __ahsrMap?: MlMap }).__ahsrMap = map;
+      setEngine("gl");
+      onSlewTo = (ev: Event) => {
+        const d = (ev as CustomEvent<{ lon: number; lat: number; zoom: number; label?: string; date?: string }>).detail;
+        if (!map || !d || !Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+        runSlew(map, { lon: d.lon, lat: d.lat, zoom: d.zoom ?? 15.4, label: d.label });
+        if (d.date && /^\d{4}-\d{2}-\d{2}$/.test(d.date)) {
+          window.setTimeout(() => {
+            const s = useAppStore.getState();
+            s.setDate(d.date!);
+            const t = Date.parse(`${d.date}T12:00:00Z`) - 14 * 86400000;
+            if (Number.isFinite(t)) s.setCompareDate(new Date(t).toISOString().slice(0, 10));
+            if (s.imagery === "dark" || s.imagery === "hires" || s.imagery === "gmaps" || s.imagery === "s2cloudless") {
+              s.setImagery("s2");
+            }
+          }, 700);
+        }
+      };
+      window.addEventListener("ahsr-slew-to", onSlewTo);
       try {
         map.scrollZoom.setWheelZoomRate(1 / 620);
         map.scrollZoom.setZoomRate(1 / 220);
@@ -518,7 +644,7 @@ export function MapCanvas({
       const overridesNow = state.partyOverrides;
       const kindNow = state.kindFilter;
 
-      map.on("load", () => {
+      map.on("style.load", () => {
         if (!map || cancelled) return;
         map.resize();
         setMapReady(true);
@@ -798,6 +924,53 @@ export function MapCanvas({
         map.addSource("measure", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "measure-line", type: "line", source: "measure", paint: { "line-color": "#d8d2c6", "line-width": 2, "line-dasharray": [2, 1] } });
 
+        const gevCircle = (id: string, color: string) => {
+          map!.addLayer({
+            id,
+            type: "circle",
+            source: id,
+            paint: {
+              "circle-radius": 5,
+              "circle-color": color,
+              "circle-stroke-width": 1.3,
+              "circle-stroke-color": "#07090b",
+              "circle-opacity": 0.92,
+            },
+          });
+        };
+        map.addSource("quakes", { type: "geojson", data: pointFc([] as GevPin[], (r) => ({ name: r.name, note: r.note, kind: r.kind })) });
+        gevCircle("quakes", "#e2a15a");
+        map.addSource("sats", { type: "geojson", data: pointFc([] as GevPin[], (r) => ({ name: r.name, note: r.note, kind: r.kind })) });
+        gevCircle("sats", "#9adbb8");
+        map.addSource("eonet", { type: "geojson", data: pointFc([] as GevPin[], (r) => ({ name: r.name, note: r.note, kind: r.kind })) });
+        gevCircle("eonet", "#7ec8b3");
+        map.addSource("launches", { type: "geojson", data: pointFc([] as GevPin[], (r) => ({ name: r.name, note: r.note, kind: r.kind })) });
+        gevCircle("launches", "#c9b48a");
+        map.addSource("freight", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+          id: "freight-pts",
+          type: "circle",
+          source: "freight",
+          paint: {
+            "circle-radius": 4.5,
+            "circle-color": "#d4c4a0",
+            "circle-stroke-width": 1.2,
+            "circle-stroke-color": "#07090b",
+          },
+        });
+        map.addSource("hazards", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({
+          id: "hazard-pts",
+          type: "circle",
+          source: "hazards",
+          paint: {
+            "circle-radius": 4,
+            "circle-color": "#8aa4b3",
+            "circle-stroke-width": 1,
+            "circle-stroke-color": "#07090b",
+          },
+        });
+
         ready.current = true;
         setEngine("gl");
       });
@@ -842,20 +1015,99 @@ export function MapCanvas({
         if (!feat || feat.geometry.type !== "Point") return;
         const [lon, lat] = feat.geometry.coordinates as [number, number];
         const name = (feat.properties as { name?: string })?.name;
-        setFlyTarget({ lat, lon, zoom: 12.4, label: name });
+        setFlyTarget({ lat, lon, zoom: 15.2, label: name, inspect: true });
       });
       map.on("click", "rsf-watch", (e) => {
-        const id = e.features?.[0]?.properties?.id as string | undefined;
-        if (id) setSelectedSite(id);
+        const f = e.features?.[0];
+        if (!f) return;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 15.4, label: String(f.properties?.name ?? "watch") }),
+        );
       });
       bindPopup("fuae-pts", (p) => `<div style="max-width:260px;font:500 12px/1.4 'IBM Plex Sans',system-ui"><div>${p.title}</div><div style="opacity:.75;font-size:11px;margin-top:4px">FUAE · ${p.kind} · ${p.dest}</div><div style="font-weight:400;font-size:11px;margin-top:6px">${p.why ?? ""}</div><div style="opacity:.65;font-size:10px;margin-top:6px">Public track — not a cargo claim.</div></div>`);
+      bindPopup("quakes", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "USGS"}</div></div>`);
+      bindPopup("sats", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "CelesTrak / ISS"}</div></div>`);
+      bindPopup("eonet", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "NASA EONET"}</div></div>`);
+      bindPopup("launches", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "Launch Library 2"}</div></div>`);
+      bindPopup("freight-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "Smear candidate"}</div></div>`);
+      bindPopup("hazard-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? ""}</div></div>`);
       map.on("click", "detect-fill", (e) => {
-        const id = e.features?.[0]?.properties?.siteId as string | undefined;
-        if (id) setSelectedSite(id);
+        const f = e.features?.[0];
+        if (!f) return;
+        slewFromProps(f.properties as Record<string, unknown>, e.lngLat.lat, e.lngLat.lng, 16);
+      });
+      map.on("click", "detect-pts", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        slewFromProps(f.properties as Record<string, unknown>, e.lngLat.lat, e.lngLat.lng, 16.2);
+      });
+      map.on("click", "detect-line", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        slewFromProps(f.properties as Record<string, unknown>, e.lngLat.lat, e.lngLat.lng, 16);
+      });
+      map.on("click", "freight-pts", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 15.4, label: String(f.properties?.name ?? "smear") }),
+        );
+      });
+      map.on("click", "hazard-pts", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 11.8, label: String(p?.name ?? "hazard") }),
+        );
+      });
+      map.on("click", "fuae-pts", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 13.2, label: String(p?.title ?? "FUAE") }),
+        );
+      });
+      map.on("click", "quakes", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 11.4, label: String(p?.name ?? "quake") }),
+        );
+      });
+      map.on("click", "eonet", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 10.8, label: String(p?.name ?? "event") }),
+        );
       });
       map.on("click", "osint-reports", (e) => {
-        const id = e.features?.[0]?.properties?.id as string | undefined;
+        const f = e.features?.[0];
+        if (!f) return;
+        const id = f.properties?.id as string | undefined;
         if (id) setSelectedReport(id);
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 14.8, label: String(f.properties?.title ?? "report") }),
+        );
+      });
+      map.on("click", "news-pts", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 11.2, label: String(p?.name ?? "news") }),
+        );
+      });
+      map.on("click", "flights-icon", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 12.6, label: String(p?.label ?? p?.hex ?? "flight") }),
+        );
+      });
+      map.on("click", "vessels-icon", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 12.8, label: String(p?.name ?? "vessel") }),
+        );
+      });
+      map.on("click", "firms", (e) => {
+        useAppStore.getState().setFlyTarget(
+          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 13.4, label: "thermal", date: useAppStore.getState().date }),
+        );
       });
       map.on("click", "control-fill", (e) => {
         const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
@@ -933,7 +1185,13 @@ export function MapCanvas({
       setEngine("static");
     });
 
-    const failSafe = window.setTimeout(() => { if (!ready.current) setEngine("static"); }, 12000);
+    const failSafe = window.setTimeout(() => {
+      if (!ready.current && mapRef.current) {
+        ready.current = true;
+        setMapReady(true);
+        setEngine("gl");
+      }
+    }, 4000);
     return () => {
       cancelled = true;
       ready.current = false;
@@ -942,6 +1200,7 @@ export function MapCanvas({
       if (onFit) window.removeEventListener("sahel-map-fit", onFit);
       if (onMeasure) window.removeEventListener("sahel-map-measure", onMeasure);
       if (onNudge) window.removeEventListener("sahel-map-nudge", onNudge);
+      if (onSlewTo) window.removeEventListener("ahsr-slew-to", onSlewTo);
       hoverPopup.current?.remove();
       ro?.disconnect();
       map?.remove();
@@ -964,6 +1223,8 @@ export function MapCanvas({
     const setVis = (id: string, on: boolean) => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visOn(on)); };
     setVis("esri", imagery === "hires" || imagery === "s2" || imagery === "viirs");
     setVis("gmaps", imagery === "gmaps");
+    setVis("osm", imagery === "osm");
+    setVis("night", imagery === "night");
     setVis("dark", imagery === "dark");
     setVis("dark-ref", imagery === "dark");
     setVis("viirs", imagery === "viirs");
@@ -1006,6 +1267,12 @@ export function MapCanvas({
     setVis("detect-fill", detectOn);
     setVis("detect-line", detectOn);
     setVis("detect-pts", detectOn);
+    setVis("quakes", layers.quakes !== false);
+    setVis("sats", layers.sats !== false);
+    setVis("eonet", layers.eonet !== false);
+    setVis("launches", layers.launches !== false);
+    setVis("freight-pts", layers.freight !== false);
+    setVis("hazard-pts", true);
   }, [layers, imagery, briefingOn, detectOn]);
 
   useEffect(() => {
@@ -1092,6 +1359,90 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready.current) return;
+    const put = (id: string, rows: GevPin[]) => {
+      const src = map.getSource(id);
+      if (src && "setData" in src) (src as { setData: (d: FC) => void }).setData(pointFc(rows, (r) => ({ name: r.name, note: r.note, kind: r.kind })));
+    };
+    put("quakes", quakes);
+    put("sats", sats);
+    put("eonet", eonet);
+    put("launches", launches);
+  }, [quakes, sats, eonet, launches]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      try {
+        if (globeOn) {
+          map.setProjection({ type: "globe" });
+          (map as unknown as { setFog?: (v: unknown) => void }).setFog?.({
+            color: "rgb(7, 9, 11)",
+            "high-color": "rgb(28, 38, 48)",
+            "horizon-blend": 0.08,
+            "space-color": "rgb(4, 6, 8)",
+            "star-intensity": 0.42,
+          });
+          if (map.getZoom() > 3.2) {
+            try {
+              map.setZoom(2.45);
+              map.setPitch(0);
+            } catch {
+              /* optional */
+            }
+          }
+        } else {
+          map.setProjection({ type: "mercator" });
+          (map as unknown as { setFog?: (v: null) => void }).setFog?.(null);
+        }
+      } catch {
+        /* projection optional */
+      }
+    };
+    apply();
+    map.once("style.load", apply);
+  }, [globeOn, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const r = LOOK_RASTER[look as LookId] ?? LOOK_RASTER.none;
+    const ids = ["hls", "viirs", "s2cloudless", "esri", "gmaps", "dark", "osm", "night", "thermal-raster", "civilian-scene-layer"];
+    for (const id of ids) {
+      if (!map.getLayer(id)) continue;
+      try {
+        map.setPaintProperty(id, "raster-saturation", r.sat);
+        map.setPaintProperty(id, "raster-hue-rotate", r.hue);
+        map.setPaintProperty(id, "raster-contrast", r.contrast);
+        map.setPaintProperty(id, "raster-brightness-max", Math.min(1, 0.88 + r.bright));
+      } catch {
+        /* paint optional */
+      }
+    }
+  }, [look, mapReady, imagery]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const emit = () => {
+      const c = map.getCenter();
+      useAnalysisArea.getState().setCenter([c.lng, c.lat]);
+      window.dispatchEvent(
+        new CustomEvent("ahsr-cam", {
+          detail: { lat: c.lat, lon: c.lng, z: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() },
+        }),
+      );
+    };
+    emit();
+    map.on("move", emit);
+    return () => {
+      map.off("move", emit);
+    };
+  }, [mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
     const src = map.getSource("news-pts");
     if (src && "setData" in src) (src as { setData: (d: FC) => void }).setData(pointFc(newsPoints, (r) => ({ name: r.name, count: r.count })));
   }, [newsPoints]);
@@ -1112,14 +1463,19 @@ export function MapCanvas({
     const site = SITES.find((s) => s.id === selectedSiteId);
     if (!site) return;
     const close = yardsZoom || CLOSE_KINDS.has(site.kind);
-    cinematicFly(map, {
+    const job = {
       lon: site.lon,
       lat: site.lat,
       zoom: yardsZoom ? 17.2 : close ? 16.2 : 14.8,
       label: site.name,
-    });
+    };
+    if (!ready.current) {
+      pendingSlew.current = job;
+      return;
+    }
+    runSlew(map, job);
     if (yardsZoom) clearYardsZoom();
-  }, [selectedSiteId, yardsZoom, clearYardsZoom]);
+  }, [selectedSiteId, yardsZoom, clearYardsZoom, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1130,22 +1486,78 @@ export function MapCanvas({
   }, [focusedBoxId, boxes]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !flyTarget) return;
-    if (flyTarget.west != null && flyTarget.south != null && flyTarget.east != null && flyTarget.north != null) {
-      cinematicFit(map, {
-        west: flyTarget.west,
-        south: flyTarget.south,
-        east: flyTarget.east,
-        north: flyTarget.north,
-        zoom: flyTarget.zoom,
-        label: flyTarget.label,
-      });
-    } else {
-      cinematicFly(map, { lon: flyTarget.lon, lat: flyTarget.lat, zoom: flyTarget.zoom, label: flyTarget.label });
+    const t = flyTarget;
+    if (t) {
+      pendingSlew.current = { lon: t.lon, lat: t.lat, zoom: t.zoom, label: t.label };
+      setFlyTarget(null);
     }
-    setFlyTarget(null);
-  }, [flyTarget, setFlyTarget]);
+    const map = mapRef.current;
+    const job = pendingSlew.current;
+    if (!map || !ready.current || !job) return;
+    pendingSlew.current = null;
+    runSlew(map, job);
+  }, [flyTarget, setFlyTarget, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const drop = (id: string) => {
+      if (map.getLayer(id)) map.removeLayer(id);
+    };
+    drop("civilian-change-labels");
+    drop("civilian-change-lines");
+    drop("civilian-scene-layer");
+    if (map.getSource("civilian-changes")) map.removeSource("civilian-changes");
+    if (map.getSource("civilian-scene")) map.removeSource("civilian-scene");
+    if (!analysisOverlay) return;
+    map.addSource("civilian-scene", {
+      type: "image",
+      url: analysisOverlay.image,
+      coordinates: analysisOverlay.corners as [[number, number], [number, number], [number, number], [number, number]],
+    });
+    map.addLayer({
+      id: "civilian-scene-layer",
+      type: "raster",
+      source: "civilian-scene",
+      paint: { "raster-opacity": 0.92, "raster-fade-duration": 0 },
+    });
+    map.addSource("civilian-changes", { type: "geojson", data: analysisOverlay.features });
+    map.addLayer({
+      id: "civilian-change-lines",
+      type: "line",
+      source: "civilian-changes",
+      paint: { "line-color": "#d4c4a0", "line-width": 2 },
+    });
+  }, [analysisOverlay, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const src = map.getSource("freight");
+    if (src && "setData" in src) {
+      (src as { setData: (d: FC) => void }).setData(
+        pointFc(
+          freightHits.map((r, i) => ({ ...r, id: `fr-${i}` })),
+          (r) => ({
+            name: `${Math.round(r.speedKmh)} km/h ${r.headingDesc}`,
+            note: "S2 smear candidate · not a vehicle ID",
+          }),
+        ),
+      );
+    }
+  }, [freightHits]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const rows = hazardFeed?.events ?? [];
+    const src = map.getSource("hazards");
+    if (src && "setData" in src) {
+      (src as { setData: (d: FC) => void }).setData(
+        pointFc(rows, (r) => ({ name: r.title, note: `${r.provider} · ${r.category}` })),
+      );
+    }
+  }, [hazardFeed]);
 
   useEffect(() => {
     const t = THEATER_BY_ID[theaterId];
@@ -1156,25 +1568,34 @@ export function MapCanvas({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !orbitOn) return;
+    if (!map || !orbitOn) return;
+    if (!globeOn && map.getPitch() < 22) {
+      try {
+        map.setPitch(34);
+      } catch {
+        /* optional */
+      }
+    }
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      map.setBearing(map.getBearing() + dt * 5.5);
+      try {
+        map.setBearing(map.getBearing() + dt * 12);
+      } catch {
+        /* optional */
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     const stop = () => setOrbitOn(false);
-    map.on("mousedown", stop);
-    map.on("wheel", stop);
+    map.on("dragstart", stop);
     return () => {
       cancelAnimationFrame(raf);
-      map.off("mousedown", stop);
-      map.off("wheel", stop);
+      map.off("dragstart", stop);
     };
-  }, [orbitOn, mapReady, setOrbitOn]);
+  }, [orbitOn, mapReady, globeOn, setOrbitOn]);
 
   const grain =
     imagery === "s2" ? `S2 HLS ${date}` :
@@ -1189,7 +1610,7 @@ export function MapCanvas({
         <StaticSatellite date={date} boxes={boxes} firms={firms} flights={flights} onPick={setSelectedSite} />
       ) : null}
       <div ref={host} className={cn("h-full w-full", engine !== "gl" && "pointer-events-none opacity-0")} />
-      {engine === "gl" && mapReady ? <LookFx mapRef={mapRef} flights={flights} detections={detections} /> : null}
+      {engine === "gl" ? <LookFx mapRef={mapRef} flights={flights} detections={detections} /> : null}
       <div className="pointer-events-none absolute bottom-28 left-3 hidden rounded-full border border-border bg-bg/80 px-2.5 py-1 font-mono text-[11px] tabular-nums text-muted md:block">
         {cursor}
         <span className="mx-1.5 text-subtle">·</span>

@@ -13,6 +13,27 @@ function Methods() {
         system.
       </p>
 
+      <h2>God's Eye View layers</h2>
+      <p>
+        On top of the Sudan desk: MapLibre globe projection (GLOBE), a spy-telescope HUD, CARTO Dark
+        Matter OSM streets, NASA Black Marble night lights, USGS M2.5+ quakes, ISS via Where The ISS
+        At / CelesTrak, NASA EONET natural events, and Launch Library 2 upcoming pads. Same public-source
+        idea as bilawalsidhu/gods-eye-view. No Google 3D tiles, no CCTV, no ALPR, no TeleGeography
+        (non-commercial). Contacts within 250 km of the camera are a roster, not a track file.
+      </p>
+      <h2>Civilian change scan + DrishX freight</h2>
+      <p>
+        <strong>AUTO CHANGE SCAN</strong> pulls real Sentinel-2 L2A COGs from Element 84 Earth Search
+        (no upload, no key), pairs before/after on the same MGRS tile, masks SCL cloud/shadow/water,
+        and surfaces at most 30 land-change candidates for human review. IndexedDB stores reviews.
+        That is change screening, not a damage inventory.
+      </p>
+      <p>
+        <strong>FREIGHT SCAN</strong> is the DrishX / Fisser 2022 B02–B04 motion-smear extractor on
+        OSM motorway/trunk/primary buffers. It counts large-vehicle smear candidates, with speed and
+        heading from smear geometry. It cannot ID cars, cargo, or military vs civilian trucks. The
+        original RF pickle is not in the browser; this is the spectral object extractor on public COGs.
+      </p>
       <h2>Optical browse</h2>
       <p>
         Four public stacks, switched in the workspace: <strong>Sentinel-2 HLS</strong> (NASA

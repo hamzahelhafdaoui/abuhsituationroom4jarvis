@@ -163,6 +163,10 @@ export function briefingHtml(flights: FlightEvent[], firms: ThermalEvent[], log:
       ticker: [],
       vessels: [],
       vesselsMeta: { fetchedAt: null, recordCount: 0, status: "empty", source: "export", note: "" },
+      quakes: [],
+      sats: [],
+      eonet: [],
+      launches: [],
     },
     lastSweepAt: useAppStore.getState().lastSweepAt,
   });

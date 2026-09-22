@@ -13,8 +13,8 @@ export function spyEase(t: number) {
 }
 
 export function pitchForZoom(z: number) {
-  if (z < 6.4) return 0;
-  return Math.min(34, (z - 6.4) * 3.8);
+  if (z < 6.2) return 0;
+  return Math.min(48, (z - 6.2) * 4.2);
 }
 
 export function aglKm(lat: number, zoom: number) {
@@ -26,7 +26,7 @@ export function flyMs(fromZ: number, toZ: number, distDeg: number) {
   const reduced =
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (reduced) return 180;
-  return Math.min(3400, Math.max(1100, 720 + Math.abs(toZ - fromZ) * 280 + distDeg * 110));
+  return Math.min(4200, Math.max(1400, 900 + Math.abs(toZ - fromZ) * 320 + distDeg * 140));
 }
 
 export function emitSlew(detail: SlewDetail) {
@@ -38,6 +38,10 @@ type FlyMap = {
   getZoom: () => number;
   getBearing: () => number;
   flyTo: (o: Record<string, unknown>) => void;
+  easeTo?: (o: Record<string, unknown>) => void;
+  stop?: () => void;
+  loaded?: () => boolean | void;
+  isStyleLoaded?: () => boolean | void;
   fitBounds?: (b: [[number, number], [number, number]], o: Record<string, unknown>) => void;
   once: (ev: string, fn: () => void) => void;
   off: (ev: string, fn: () => void) => void;
@@ -47,29 +51,47 @@ export function cinematicFly(
   map: FlyMap,
   opts: { lon: number; lat: number; zoom: number; label?: string },
 ) {
-  const from = map.getCenter();
-  const dist = Math.hypot(opts.lat - from.lat, opts.lon - from.lng);
-  const duration = flyMs(map.getZoom(), opts.zoom, dist);
-  const inward = opts.zoom > map.getZoom() + 0.35;
-  const bearing = map.getBearing() + (inward ? 16 + Math.min(18, dist * 5) : -8);
-  emitSlew({ phase: "slewing", label: opts.label, duration });
-  const onEnd = () => {
-    map.off("moveend", onEnd);
-    emitSlew({ phase: "lock", label: opts.label });
-    window.setTimeout(() => emitSlew({ phase: "idle" }), 1600);
+  let ran = false;
+  const go = () => {
+    if (ran) return;
+    ran = true;
+    try {
+      map.stop?.();
+    } catch {
+      /* optional */
+    }
+    const from = map.getCenter();
+    const dist = Math.hypot(opts.lat - from.lat, opts.lon - from.lng);
+    const duration = flyMs(map.getZoom(), opts.zoom, dist);
+    const inward = opts.zoom > map.getZoom() + 0.2;
+    const bearing = map.getBearing() + (inward ? 22 + Math.min(24, dist * 6) : -10);
+    emitSlew({ phase: "slewing", label: opts.label, duration });
+    const onEnd = () => {
+      map.off("moveend", onEnd);
+      emitSlew({ phase: "lock", label: opts.label });
+      window.setTimeout(() => emitSlew({ phase: "idle" }), 1800);
+    };
+    map.once("moveend", onEnd);
+    const cam = {
+      center: [opts.lon, opts.lat],
+      zoom: opts.zoom,
+      pitch: pitchForZoom(opts.zoom),
+      bearing,
+      duration,
+      easing: spyEase,
+      essential: true,
+    };
+    if (map.easeTo) map.easeTo(cam);
+    else map.flyTo({ ...cam, curve: 1.7, speed: 0.42 });
   };
-  map.once("moveend", onEnd);
-  map.flyTo({
-    center: [opts.lon, opts.lat],
-    zoom: opts.zoom,
-    pitch: pitchForZoom(opts.zoom),
-    bearing,
-    duration,
-    curve: 1.62,
-    speed: 0.48,
-    easing: spyEase,
-    essential: true,
-  });
+  const ready = map.isStyleLoaded?.() || map.loaded?.();
+  if (ready === false) {
+    map.once("style.load", go);
+    map.once("load", go);
+    window.setTimeout(go, 2500);
+    return;
+  }
+  go();
 }
 
 export function cinematicFit(

@@ -37,7 +37,12 @@ export type LayerKey =
   | "vessels"
   | "corridors"
   | "rsfWatch"
-  | "vista";
+  | "vista"
+  | "quakes"
+  | "sats"
+  | "eonet"
+  | "launches"
+  | "freight";
 
 export type RightTab = "log" | "queue" | "news" | "brief" | "reports" | "feeds" | "fuae" | "rsf";
 
@@ -51,6 +56,8 @@ export interface FlyTarget {
   east?: number;
   north?: number;
   inspect?: boolean;
+  /** Snap GIBS / HLS to this acquisition day when slewing. */
+  date?: string;
 }
 
 interface Review {
@@ -143,6 +150,8 @@ interface AppState {
   setLook: (l: LookId) => void;
   orbitOn: boolean;
   setOrbitOn: (v: boolean) => void;
+  globeOn: boolean;
+  setGlobeOn: (v: boolean) => void;
 }
 
 function stamp(): string {
@@ -199,6 +208,11 @@ export const useAppStore = create<AppState>()(
         corridors: true,
         rsfWatch: true,
         vista: true,
+        quakes: true,
+        sats: true,
+        eonet: true,
+        launches: true,
+        freight: true,
       },
       imagery: "s2cloudless",
       date: daysAgo(4),
@@ -222,6 +236,7 @@ export const useAppStore = create<AppState>()(
       detectOn: true,
       look: "none",
       orbitOn: false,
+      globeOn: false,
       theaterId: "sdn",
       controlUpdates: [],
       flyTarget: null,
@@ -331,11 +346,39 @@ export const useAppStore = create<AppState>()(
       setDetectOn: (detectOn) => set({ detectOn }),
       setLook: (look) => set((s) => ({ look, hudOn: look === "none" ? s.hudOn : true })),
       setOrbitOn: (orbitOn) => set({ orbitOn }),
+      setGlobeOn: (globeOn) => set({ globeOn }),
       setTheater: (theaterId) => set({ theaterId }),
       addControlUpdate: (u) =>
         set((s) => ({ controlUpdates: [u, ...s.controlUpdates].slice(0, 80) })),
       setFlyTarget: (flyTarget) =>
-        set(flyTarget ? { flyTarget, selectedSiteId: null } : { flyTarget: null }),
+        set((s) => {
+          if (!flyTarget) return { flyTarget: null };
+          const day = flyTarget.date?.slice(0, 10);
+          const dated = day && /^\d{4}-\d{2}-\d{2}$/.test(day);
+          const inspect = Boolean(flyTarget.inspect) || flyTarget.zoom >= 11;
+          const next: Partial<AppState> = {
+            flyTarget,
+            selectedSiteId: null,
+            orbitOn: false,
+            globeOn: inspect ? false : s.globeOn,
+          };
+          if (typeof window !== "undefined") {
+            queueMicrotask(() =>
+              window.dispatchEvent(
+                new CustomEvent("ahsr-slew-to", {
+                  detail: {
+                    lon: flyTarget.lon,
+                    lat: flyTarget.lat,
+                    zoom: flyTarget.zoom,
+                    label: flyTarget.label,
+                    date: dated ? day : undefined,
+                  },
+                }),
+              ),
+            );
+          }
+          return next;
+        }),
       setDateLock: (dateLock) => set({ dateLock }),
       ingestFuae: (rows) =>
         set((s) => {
@@ -384,6 +427,7 @@ export const useAppStore = create<AppState>()(
         modelWeights: s.modelWeights,
         chipSamples: s.chipSamples,
         look: s.look,
+        globeOn: s.globeOn,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<AppState>;
@@ -407,6 +451,11 @@ export const useAppStore = create<AppState>()(
             corridors: p.layers?.corridors ?? true,
             rsfWatch: p.layers?.rsfWatch ?? true,
             vista: p.layers?.vista ?? true,
+            quakes: p.layers?.quakes ?? true,
+            sats: p.layers?.sats ?? true,
+            eonet: p.layers?.eonet ?? true,
+            launches: p.layers?.launches ?? true,
+            freight: p.layers?.freight ?? true,
           },
           controlUpdates: p.controlUpdates ?? [],
           fuaeLog: p.fuaeLog ?? [],
@@ -414,7 +463,7 @@ export const useAppStore = create<AppState>()(
           modelWeights: p.modelWeights ?? DEFAULT_WEIGHTS,
           chipSamples: Array.isArray(p.chipSamples) ? p.chipSamples.slice(0, 400) : [],
           look: p.look === "crt" || p.look === "nvg" || p.look === "flir" || p.look === "noir" || p.look === "snow" ? p.look : "none",
-          helpOpen: false,
+          globeOn: Boolean(p.globeOn),
           helpSeen: Boolean(p.helpSeen) || p.helpOpen === false,
         };
       },

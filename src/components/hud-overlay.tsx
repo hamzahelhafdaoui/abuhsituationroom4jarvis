@@ -178,7 +178,26 @@ export function SensorBar({
           DOCS
         </button>
       ) : null}
+      <GlobeToggle />
     </div>
+  );
+}
+
+function GlobeToggle() {
+  const globeOn = useAppStore((s) => s.globeOn);
+  const setGlobeOn = useAppStore((s) => s.setGlobeOn);
+  return (
+    <button
+      type="button"
+      title="MapLibre globe projection — God's Eye View style"
+      onClick={() => setGlobeOn(!globeOn)}
+      className={cn(
+        "h-8 rounded-sm px-2 font-mono text-[10px] tracking-wider",
+        globeOn ? "text-accent" : "text-muted hover:text-fg",
+      )}
+    >
+      GLOBE
+    </button>
   );
 }
 

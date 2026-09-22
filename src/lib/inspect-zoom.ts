@@ -1,7 +1,8 @@
 import type { DetectHit, DetectKlass } from "@/lib/imagery-detect";
 import type { Flag } from "@/lib/flags";
+import type { FlyTarget } from "@/lib/store";
 
-/** Yard-scale inspect zoom by morphology. z11 is theater — too wide to verify a chip. */
+/** Yard-scale inspect zoom by morphology. Theater zoom is too wide to verify a chip. */
 export const INSPECT_ZOOM: Record<DetectKlass, number> = {
   wreck_air: 17.0,
   wreck_bldg: 16.7,
@@ -21,8 +22,8 @@ export const INSPECT_ZOOM: Record<DetectKlass, number> = {
   osm_gap: 14.2,
   crossing_cue: 15.0,
   maritime: 12.2,
-  corridor_track: 11.2,
-  reporting_cue: 13.6,
+  corridor_track: 13.4,
+  reporting_cue: 14.6,
 };
 
 export function inspectZoomForKlass(klass?: DetectKlass, type?: Flag["type"]) {
@@ -30,62 +31,56 @@ export function inspectZoomForKlass(klass?: DetectKlass, type?: Flag["type"]) {
   if (type === "damage") return 16.0;
   if (type === "convoy") return 16.2;
   if (type === "flight") return 13.8;
-  return 15.4;
+  return 15.6;
 }
 
-export function padBbox(
-  west: number,
-  south: number,
-  east: number,
-  north: number,
-  minDeg = 0.018,
-) {
-  const dlat = Math.max(minDeg, north - south);
-  const dlon = Math.max(minDeg, east - west);
-  const cy = (south + north) / 2;
-  const cx = (west + east) / 2;
+export function dayOf(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = iso.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+}
+
+export function daysBefore(iso: string, n: number) {
+  const t = Date.parse(`${iso}T12:00:00Z`) - n * 86400000;
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+/** Always a point slew. Never a wide fitBounds — that was aborting yard zoom. */
+export function inspectCam(opts: {
+  lat: number;
+  lon: number;
+  zoom?: number;
+  label?: string;
+  date?: string | null;
+}): FlyTarget {
+  const date = dayOf(opts.date);
   return {
-    west: cx - dlon / 2,
-    south: cy - dlat / 2,
-    east: cx + dlon / 2,
-    north: cy + dlat / 2,
+    lat: opts.lat,
+    lon: opts.lon,
+    zoom: opts.zoom ?? 15.6,
+    label: opts.label,
+    inspect: true,
+    date: date ?? undefined,
   };
 }
 
-export function inspectFromHit(hit: DetectHit) {
-  const zoom = inspectZoomForKlass(hit.klass);
-  const dlat = Math.abs(hit.north - hit.south);
-  const dlon = Math.abs(hit.east - hit.west);
-  const chip = dlat > 0 && dlon > 0 && dlat < 0.035 && dlon < 0.035;
-  if (!chip) {
-    return { lat: hit.lat, lon: hit.lon, zoom, label: hit.title, inspect: true as const };
-  }
-  const box = padBbox(hit.west, hit.south, hit.east, hit.north);
-  return {
+export function inspectFromHit(hit: DetectHit): FlyTarget {
+  return inspectCam({
     lat: hit.lat,
     lon: hit.lon,
-    zoom,
+    zoom: inspectZoomForKlass(hit.klass),
     label: hit.title,
-    ...box,
-    inspect: true as const,
-  };
+    date: hit.date,
+  });
 }
 
-export function inspectFromFlag(f: Flag) {
-  const zoom = inspectZoomForKlass(f.klass, f.type);
-  const dlat = f.north != null && f.south != null ? Math.abs(f.north - f.south) : 99;
-  const dlon = f.east != null && f.west != null ? Math.abs(f.east - f.west) : 99;
-  const chip = dlat < 0.035 && dlon < 0.035;
-  if (!chip) {
-    return { lat: f.lat, lon: f.lon, zoom, label: f.title, inspect: true as const };
-  }
-  const box = padBbox(f.west!, f.south!, f.east!, f.north!);
-  return {
+export function inspectFromFlag(f: Flag): FlyTarget {
+  return inspectCam({
     lat: f.lat,
     lon: f.lon,
-    zoom,
+    zoom: inspectZoomForKlass(f.klass, f.type),
     label: f.title,
-    ...box,
-    inspect: true as const,
-  };
+    date: f.date,
+  });
 }

@@ -4,7 +4,7 @@ import { AlertTriangle, CircleHelp, ClipboardList, FileText, Layers, Minus, News
 import { ALERTS, FLIGHTS, OBSERVATIONS, SITES } from "@/data/catalog";
 import { VESSEL_SEED } from "@/data/regional-sites";
 import { ingestLive } from "@/lib/changelog";
-import { getLiveBundle, getTraffic } from "@/lib/live";
+import { getLiveBundle, getTraffic, getGevWorld } from "@/lib/live";
 import { getNewsFeed } from "@/lib/news";
 import { generateAiBrief } from "@/lib/ai-brief";
 import { compileSitrep, type Sitrep } from "@/lib/sitrep";
@@ -16,7 +16,7 @@ import type { Flag } from "@/lib/flags";
 import { SEED_REPORTS } from "@/lib/osint";
 import { GDELT_ARCHIVE, OSM_SEED, FEED_SEED } from "@/lib/warroom-data";
 import { THEATER_BY_ID, THEATERS } from "@/lib/theaters";
-import { inspectFromFlag, inspectFromHit } from "@/lib/inspect-zoom";
+import { inspectFromFlag, inspectFromHit, inspectCam } from "@/lib/inspect-zoom";
 import { signalCoincidence } from "@/lib/fusion";
 import { VISTA_DIVS } from "@/lib/vista-map";
 import { IMAGERY, siteInKindGroup, type AiBrief, type FlightEvent, type LiveBundle, type ReviewState, type ThermalEvent } from "@/lib/types";
@@ -26,6 +26,11 @@ import { MapCanvas } from "@/components/map-canvas";
 import { LeftRail, RightRail, type MobileTab } from "@/components/rails";
 import { ControlLegend, DetectPanel } from "@/components/monitor-panels";
 import { ClassificationBar, ClockChip, SensorBar, SitroomFx } from "@/components/hud-overlay";
+import { GodseyeHud } from "@/components/godseye-hud";
+import { ImageryReviewWorkbench } from "@/components/imagery-review";
+import { FreightDesk } from "@/components/freight-desk";
+import { refreshHazards } from "@/lib/hazard-state";
+import { useFreightState } from "@/lib/freight-state";
 import { LookTray } from "@/components/sensor-fx";
 import { BasemapPicker, LayerStack } from "@/components/map-chrome";
 
@@ -129,6 +134,7 @@ export function Workspace() {
   const [deskOpen, setDeskOpen] = useState(false);
   const [detectReport, setDetectReport] = useState<DetectReport | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const freightHits = useFreightState((s) => s.hits);
   const customReports = useAppStore((s) => s.customReports);
   const searchRef = useRef<HTMLInputElement>(null);
   const [boxForm, setBoxForm] = useState({
@@ -263,6 +269,10 @@ export function Workspace() {
             ticker: n.items.map((i) => ({ source: i.source, title: i.title, url: i.url })),
             vessels: VESSEL_SEED,
             vesselsMeta: n.meta,
+            quakes: [],
+            sats: [],
+            eonet: [],
+            launches: [],
           };
         }
         const nextLive = {
@@ -287,10 +297,53 @@ export function Workspace() {
     };
     refreshNews();
     const newsId = window.setInterval(refreshNews, 5 * 60 * 1000);
+    const loadGev = () => {
+      getGevWorld()
+        .then((g) => {
+          if (cancelled) return;
+          setLive((prev) =>
+            prev
+              ? { ...prev, quakes: g.quakes, sats: g.sats, eonet: g.eonet, launches: g.launches }
+              : {
+                  firms: [],
+                  firmsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  flights: [],
+                  flightsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  reports: [],
+                  reportsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  news: [],
+                  newsPoints: [],
+                  newsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  gdelt: GDELT_ARCHIVE,
+                  gdeltMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "ok", source: "gev", note: "" },
+                  osm: OSM_SEED,
+                  osmMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "ok", source: "gev", note: "" },
+                  feeds: [],
+                  feedsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  ticker: [],
+                  vessels: VESSEL_SEED,
+                  vesselsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "gap", source: "gev", note: "" },
+                  quakes: g.quakes,
+                  sats: g.sats,
+                  eonet: g.eonet,
+                  launches: g.launches,
+                },
+          );
+        })
+        .catch(() => {
+          /* public feeds can 429; HUD stays at zero */
+        });
+    };
+    loadGev();
+    const gevId = window.setInterval(loadGev, 3 * 60 * 1000);
+    void refreshHazards();
+    const hazId = window.setInterval(() => void refreshHazards(), 5 * 60 * 1000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
       window.clearInterval(newsId);
+      window.clearInterval(gevId);
+      window.clearInterval(hazId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -322,6 +375,10 @@ export function Workspace() {
                 ticker: [],
                 vessels: t.vessels,
                 vesselsMeta: t.vesselsMeta,
+                quakes: [],
+                sats: [],
+                eonet: [],
+                launches: [],
               };
             }
             return {
@@ -544,13 +601,11 @@ export function Workspace() {
   function openAnno(id: string) {
     const a = briefingDoc?.annotations.find((x) => x.id === id);
     if (!a) return;
-    setFlyTarget({ lat: a.lat, lon: a.lon, zoom: 8.2, label: a.title });
+    setFlyTarget({ lat: a.lat, lon: a.lon, zoom: 14.6, label: a.title, inspect: true, date: date });
   }
 
   function openDetect(hit: DetectHit) {
-    setImagery("hires");
     setFlyTarget(inspectFromHit(hit));
-    if (hit.siteId) setSelectedSite(hit.siteId);
   }
 
   function pickMobile(id: MobileTab) {
@@ -593,15 +648,13 @@ export function Workspace() {
     feedsMeta: live?.feedsMeta ?? null,
     fuae: fuaeLog,
     onOpenFuae: (r: FuaeRecord) => {
-      setFlyTarget({ lat: r.lat, lon: r.lon, zoom: 7.4, label: r.title });
+      setFlyTarget({ lat: r.lat, lon: r.lon, zoom: 13.4, label: r.title, inspect: true, date: r.firstSeen?.slice(0, 10) });
       setDeskOpen(true);
       setRightTab("fuae");
     },
     detections: detectReport?.hits ?? [],
     onOpenFlag: (f: Flag) => {
-      setImagery("hires");
       setFlyTarget(inspectFromFlag(f));
-      if (f.siteId) setSelectedSite(f.siteId);
       if (f.id.startsWith("flag-rep-")) {
         setSelectedReport(f.id.slice("flag-rep-".length));
         setDeskOpen(true);
@@ -626,9 +679,24 @@ export function Workspace() {
         annotations={briefingOn ? (briefingDoc?.annotations ?? []) : []}
         detections={detectOn ? (detectReport?.hits ?? []) : []}
         fuae={fuaeLog}
+        quakes={live?.quakes ?? []}
+        sats={live?.sats ?? []}
+        eonet={live?.eonet ?? []}
+        launches={live?.launches ?? []}
       />
 
       <SitroomFx />
+      <ImageryReviewWorkbench />
+      <GodseyeHud
+        flights={flights}
+        vessels={vessels}
+        counts={{
+          quakes: live?.quakes.length ?? 0,
+          sats: live?.sats.length ?? 0,
+          eonet: live?.eonet.length ?? 0,
+          launches: live?.launches.length ?? 0,
+        }}
+      />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-30 p-3">
         <ClassificationBar />
@@ -786,7 +854,10 @@ export function Workspace() {
                 type="button"
                 onClick={() => {
                   setSelectedAlert(null);
-                  setSelectedSite(j.id);
+                  const site = SITES.find((s) => s.id === j.id);
+                  if (site) {
+                    setFlyTarget(inspectCam({ lat: site.lat, lon: site.lon, zoom: 15.6, label: site.name }));
+                  }
                 }}
                 className={cn(
                   "h-8 border border-border bg-bg/70 px-3 text-xs text-muted backdrop-blur-sm hover:text-fg",
@@ -810,6 +881,11 @@ export function Workspace() {
             feeds: feeds.length,
             flights: flights.length,
             vessels: vessels.length,
+            quakes: live?.quakes.length ?? 0,
+            sats: live?.sats.length ?? 0,
+            eonet: live?.eonet.length ?? 0,
+            launches: live?.launches.length ?? 0,
+            freight: freightHits.length,
           }}
         />
       </div>
@@ -889,6 +965,9 @@ export function Workspace() {
               })}
             />
           ) : null}
+          <div className="pointer-events-auto mt-2">
+            <FreightDesk />
+          </div>
         </div>
       </div>
 

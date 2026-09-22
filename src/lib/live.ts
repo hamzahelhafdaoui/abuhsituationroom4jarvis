@@ -15,6 +15,7 @@ import type {
   VesselEvent,
 } from "@/lib/types";
 import { AOI } from "@/lib/types";
+import { pullGevWorld } from "@/lib/gev-world";
 
 const UA =
   "AbuHureirahSitroom/1.0 (civilian public-data archive; documentation only)";
@@ -419,8 +420,8 @@ async function pullVessels(): Promise<{ rows: VesselEvent[]; meta: LiveMeta }> {
 
 export const getLiveBundle = createServerFn({ method: "GET" }).handler(
   async (): Promise<LiveBundle> => {
-    return cached("live-bundle", TTL_MS, async () => {
-      const [firms, flights, reports, news, gdelt, osm, feeds, vessels] = await Promise.all([
+    return cached("live-bundle-gev1", TTL_MS, async () => {
+      const [firms, flights, reports, news, gdelt, osm, feeds, vessels, gev] = await Promise.all([
         pullFirms(),
         pullFlights(),
         pullReports(),
@@ -429,6 +430,7 @@ export const getLiveBundle = createServerFn({ method: "GET" }).handler(
         pullOsm(),
         pullFeeds(),
         pullVessels(),
+        pullGevWorld(),
       ]);
       const ticker = await pullTicker(
         news.items.map((n) => ({ source: n.source, title: n.title, url: n.url })),
@@ -452,10 +454,18 @@ export const getLiveBundle = createServerFn({ method: "GET" }).handler(
         ticker,
         vessels: vessels.rows,
         vesselsMeta: vessels.meta,
+        quakes: gev.quakes,
+        sats: gev.sats,
+        eonet: gev.eonet,
+        launches: gev.launches,
       };
     });
   },
 );
+
+export const getGevWorld = createServerFn({ method: "GET" }).handler(async () => {
+  return cached("gev-world", 120_000, () => pullGevWorld());
+});
 
 export const getTraffic = createServerFn({ method: "GET" }).handler(
   async (): Promise<{

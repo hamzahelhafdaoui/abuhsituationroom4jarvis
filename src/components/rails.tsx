@@ -476,7 +476,7 @@ export function RightRail(props: {
   }
 
   if (force === "log") {
-    return <ChangeLogList onOpenSite={setSelectedSite} />;
+    return <ChangeLogList />;
   }
 
   if (force === "brief") {
@@ -690,7 +690,7 @@ function QueueOrLog({
         ))}
       </div>
       {rightTab === "log" ? (
-        <ChangeLogList onOpenSite={setSelectedSite} />
+        <ChangeLogList />
       ) : rightTab === "news" ? (
         <NewsPanel data={news} loading={newsLoading} />
       ) : rightTab === "brief" ? (
@@ -764,12 +764,11 @@ function QueueOrLog({
                   <button
                     type="button"
                     onClick={() => {
-                      onOpenFlag?.(f);
-                      if (ALERTS.some((a) => a.id === f.id)) {
-                        setSelectedAlert(f.id);
-                        if (f.siteId) setSelectedSite(f.siteId);
-                      }
-                    }}
+                onOpenFlag?.(f);
+                if (ALERTS.some((a) => a.id === f.id)) {
+                  setSelectedAlert(f.id);
+                }
+              }}
                     className="mb-1.5 w-full rounded-xl border border-border bg-surface/60 p-3 text-left hover:bg-raised"
                   >
                     <span className="flex items-start justify-between gap-2">
@@ -861,11 +860,12 @@ function OrderToggle({ order, onChange }: { order: ListOrder; onChange: (o: List
   );
 }
 
-function ChangeLogList({ onOpenSite }: { onOpenSite: (id: string) => void }) {
+function ChangeLogList() {
   const rows = useAppStore((s) => s.changeLog);
   const lastSweepAt = useAppStore((s) => s.lastSweepAt);
   const listOrder = useAppStore((s) => s.listOrder);
   const setListOrder = useAppStore((s) => s.setListOrder);
+  const setFlyTarget = useAppStore((s) => s.setFlyTarget);
   const [fam, setFam] = useState<"all" | "vehicles" | "flight" | "corridor" | "damage" | "morphology" | "thermal" | "reporting">("all");
   const filtered = fam === "all" ? rows : rows.filter((e) => e.families.includes(fam));
   const shown = listOrder === "newest" ? filtered : [...filtered].reverse();
@@ -897,7 +897,14 @@ function ChangeLogList({ onOpenSite }: { onOpenSite: (id: string) => void }) {
             <button
               type="button"
               onClick={() => {
-                if (e.siteId) onOpenSite(e.siteId);
+                setFlyTarget({
+                  lat: e.lat,
+                  lon: e.lon,
+                  zoom: 15.2,
+                  label: e.title,
+                  inspect: true,
+                  date: e.firstSeen.slice(0, 10),
+                });
               }}
               className="mb-1.5 w-full rounded-xl border border-border bg-surface/60 p-3 text-left hover:bg-raised"
             >

@@ -15,7 +15,9 @@ import type { Coincidence } from "@/lib/fusion";
 import { parseWeights, serializeWeights } from "@/lib/chip-model";
 import { downloadBlob } from "@/lib/utils";
 import { useAppStore } from "@/lib/store";
+import { inspectCam } from "@/lib/inspect-zoom";
 import { Button } from "@/components/ui/button";
+import { HazardFeedRows } from "@/components/hazard-feed";
 import { cn } from "@/lib/utils";
 
 function relative(iso: string | null): string {
@@ -197,6 +199,7 @@ const TONE_DOT: Record<string, string> = {
 export function FeedsPanel({ items, meta }: { items: FeedItem[]; meta: LiveMeta | null }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+      <HazardFeedRows />
       <p className="text-[11px] leading-snug text-subtle">
         Public Telegram web previews (t.me/s). Not a login, not a targeting feed.
         {meta?.fetchedAt ? ` Fetched ${meta.fetchedAt.slice(11, 16)}Z · ${meta.recordCount} notes.` : ""}
@@ -583,7 +586,12 @@ export function ReportsList({
           <li key={r.id}>
             <button
               type="button"
-              onClick={() => onSelect(r.id)}
+              onClick={() => {
+                onSelect(r.id);
+                useAppStore.getState().setFlyTarget(
+                  inspectCam({ lat: r.lat, lon: r.lon, zoom: 15.2, label: r.title, date: r.date }),
+                );
+              }}
               className="flex w-full flex-col gap-1 rounded-xl border border-border bg-surface/60 p-3 text-left hover:bg-raised"
             >
               <span className="flex items-center justify-between gap-2 text-[11px] text-subtle">

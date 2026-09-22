@@ -1,4 +1,4 @@
-export type ImagerySource = "s2" | "viirs" | "s2cloudless" | "hires" | "gmaps" | "dark";
+export type ImagerySource = "s2" | "viirs" | "s2cloudless" | "hires" | "gmaps" | "dark" | "osm" | "night";
 
 export const IMAGERY: Record<
   ImagerySource,
@@ -45,6 +45,20 @@ export const IMAGERY: Record<
     dated: false,
     note: "Esri Dark Gray Canvas, phosphor-graded. Reference basemap for annotations — not imagery. No API key. Use satellite options to inspect yards.",
     pickerNote: "Esri dark canvas — phosphor / black. No API key.",
+  },
+  osm: {
+    label: "OSM streets",
+    grain: "map · live cartography",
+    dated: false,
+    note: "OpenStreetMap raster via CARTO Dark Matter. Context streets, not imagery.",
+    pickerNote: "CARTO Dark Matter + OSM — globe / street context",
+  },
+  night: {
+    label: "Black marble · night",
+    grain: "city lights · GIBS",
+    dated: false,
+    note: "NASA Black Marble / VIIRS night lights. Settlement glow, not a dated overpass you can clock.",
+    pickerNote: "Night lights — GEV-style globe from orbit",
   },
 };
 
@@ -401,6 +415,10 @@ export interface LiveBundle {
   ticker: TickerItem[];
   vessels: VesselEvent[];
   vesselsMeta: LiveMeta;
+  quakes: import("@/lib/gev-world").GevPin[];
+  sats: import("@/lib/gev-world").GevPin[];
+  eonet: import("@/lib/gev-world").GevPin[];
+  launches: import("@/lib/gev-world").GevPin[];
 }
 
 export const PARTY_LABEL: Record<Party, string> = {
