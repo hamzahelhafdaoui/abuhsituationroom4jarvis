@@ -208,7 +208,7 @@ export function LeftRail(props: {
         <section>
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-subtle">Imagery</h2>
           <div className="flex flex-wrap gap-1">
-            {(["hires", "gmaps", "s2cloudless", "viirs", "dark", "s2"] as const).map((id) => (
+            {(["hires", "gmaps", "s2cloudless", "s2", "s1", "viirs", "dark"] as const).map((id) => (
               <button
                 key={id}
                 type="button"
@@ -264,7 +264,9 @@ export function LeftRail(props: {
               ["ai", "AI brief pins", FileText],
               ["gdelt", "GDELT events", AlertTriangle],
               ["osm", "OSM / airfields", Shield],
-              ["vessels", "Maritime nodes", Ship],
+              ["vessels", "Vessels (AIS)", Ship],
+              ["lanes", "Lane markers · NOT LIVE AIS", Ship],
+              ["conflict", "Open conflict cites", FileText],
               ["corridors", "Reported corridors", Eye],
               ["rsfWatch", "RSF watchlist", Shield],
               ["firms", "FIRMS thermal", Flame],

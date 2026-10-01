@@ -716,7 +716,7 @@ export function fuseDetect(args: {
       lat: r.lat,
       lon: r.lon,
       ...bbox,
-      confidence: Math.min(r.confidence, 3) as 1 | 2 | 3,
+      confidence: Math.min(r.confidence, 2) as 1 | 2,
       families: r.category === "strike-damage" ? ["damage", "reporting"] : r.category === "vehicle-buildup" ? ["vehicles", "reporting"] : ["reporting"],
       techniques: ["fusion", "xai", r.category === "strike-damage" ? "damage" : "obb"],
       explain: explain(["fusion", "xai"]),

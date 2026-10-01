@@ -35,17 +35,30 @@ function Sop() {
 
       <h2>3:00–4:00 — Thermal</h2>
       <p>
-        FIRMS: day or night, FRP, satellite, confidence. Is this Gezira in the dry season
+        FIRMS: day or night, FRP, satellite, confidence, class. Is this Gezira in the dry season
         (agricultural)? Heglig (flare)? Brick kilns? Urban night cluster near a hospital or camp
-        (possible structure fire or explosive — still “possible”)? Snap radius is kilometres, not
-        metres; 375 m pixels do not pinpoint a warehouse door.
+        (possible structure fire or explosive — still “possible”)? If the health chip is red, read
+        the reason (CSV fail, empty box, no key path) and do not treat zero as “no fires.” Snap
+        radius is kilometres, not metres; 375 m pixels do not pinpoint a warehouse door.
       </p>
 
-      <h2>4:00–5:00 — Flights</h2>
+      <h2>3:00–4:30 — Cloud and SAR</h2>
       <p>
-        If a flight family is attached: airframe category, scheduled or not, nearest airfield,
-        whether a landing is actually in ADS-B. Forced questions you must answer or explicitly
-        decline:
+        If Sentinel-2 is cloudy, switch to Sentinel-1 for that date. Use it as morphology context
+        only. Do not count vehicles on speckle. Do not call a bright SAR return wreckage. DET stays
+        off on this layer. Write “coverage gap” if both optical and SAR are empty.
+      </p>
+
+      <h2>4:30–5:30 — Flights and ships</h2>
+      <p>
+        Flights: airframe category, scheduled or not, nearest airfield, whether a landing is
+        actually in ADS-B. Khartoum and Darfur silence is usually a coverage gap.
+      </p>
+      <p>
+        Ships: only the AIS layer with age under 30 minutes is a contact. Gulf AIS is not a Red
+        Sea arrival. Lane markers say NOT LIVE AIS — do not log them as hulls. Type is typical,
+        not cargo. Kufra is a land node; use freight smear (possible moving vehicles, not a count)
+        and ADS-B, not a fictional ship.
       </p>
       <ul>
         <li>Where did the aircraft arrive?</li>
@@ -56,9 +69,11 @@ function Sop() {
 
       <h2>5:00–7:00 — Corroboration</h2>
       <p>
-        Scan ReliefWeb, UN, OHCHR, Yale HRL, Reuters, or the analyst’s own verified citations.
-        Reporting can raise confidence; it is not ground truth. Cross-border Ethiopian compounds
-        stay undetermined until a movement chain into Sudan is shown.
+        Scan ReliefWeb, UN, OHCHR, Yale HRL, Reuters, or the shipped conflict citations. Open the
+        source URL. Reporting can raise confidence; it is not ground truth and not an AHSR
+        assessment. A citation pin alone does not confirm an alert. News centroids are not incident
+        coordinates. Cross-border Ethiopian compounds stay undetermined until a movement chain
+        into Sudan is shown.
       </p>
 
       <h2>7:00–9:00 — Score</h2>

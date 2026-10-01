@@ -18,7 +18,7 @@ import { VISTA } from "@/lib/vista-map";
 import { useAppStore, type LayerKey } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-const PICKER: ImagerySource[] = ["hires", "gmaps", "s2cloudless", "viirs", "night", "osm", "dark", "s2"];
+const PICKER: ImagerySource[] = ["hires", "gmaps", "s2", "s1", "s2cloudless", "viirs", "night", "osm", "dark"];
 
 export function BasemapPicker() {
   const imagery = useAppStore((s) => s.imagery);
@@ -125,12 +125,15 @@ export function LayerStack({
     { key: "firms", label: "Fire hotspots", count: counts.fires, icon: Flame },
     { key: "gdelt", label: "Forwarded intel", count: counts.feeds, icon: Radio },
     { key: "flights", label: "Flights", count: counts.flights, icon: Plane },
-    { key: "vessels", label: "Vessels", count: counts.vessels, icon: Ship },
+    { key: "vessels", label: "Vessels (AIS)", count: counts.vessels, icon: Ship },
+    { key: "lanes", label: "Lane markers · NOT LIVE AIS", icon: Ship },
+    { key: "conflict", label: "Open conflict cites", icon: Radio },
+    { key: "grid", label: "1° grid", icon: Satellite },
     { key: "quakes", label: "USGS quakes", count: counts.quakes, icon: Flame },
     { key: "sats", label: "ISS / sats", count: counts.sats, icon: Satellite },
     { key: "eonet", label: "EONET", count: counts.eonet, icon: Radio },
     { key: "launches", label: "Launches", count: counts.launches, icon: Rocket },
-    { key: "freight", label: "Freight smear", count: counts.freight, icon: Ship },
+    { key: "freight", label: "Freight smear · not a count", count: counts.freight, icon: Ship },
   ];
   return (
     <div className="hud-panel pointer-events-auto hidden w-[13.5rem] overflow-hidden md:block">

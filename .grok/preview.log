@@ -1986,3 +1986,33 @@ Error: aborted
     at async callNextMiddleware (file:///workspace/.vercel/output/functions/__server.func/_ssr/ssr.mjs:311:20)
     at async AsyncFunction.__executeServer (file:///workspace/.vercel/output/functions/__server.func/_ssr/ssr.mjs:255:13)
     at async file:///workspace/.vercel/output/functions/__server.func/_ssr/ssr.mjs:676:13
+
+> preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 9/24/2026, 11:53:57 AM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/
+
+> preview
+> node scripts/with-app-env.mjs vite preview
+
+
+ ╭────────── [Build Info] ─────────────╮
+ │                                     │
+ │  - Build Directory: .vercel/output  │
+ │  - Date: 9/24/2026, 11:56:07 AM     │
+ │  - Nitro Version: 3.0.260610-beta   │
+ │  - Nitro Preset: vercel             │
+ │                                     │
+ ╰─────────────────────────────────────╯
+
+  ➜  Local:   http://127.0.0.1:8081/

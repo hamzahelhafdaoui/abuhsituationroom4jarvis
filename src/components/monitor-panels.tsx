@@ -18,6 +18,8 @@ import { useAppStore } from "@/lib/store";
 import { inspectCam } from "@/lib/inspect-zoom";
 import { Button } from "@/components/ui/button";
 import { HazardFeedRows } from "@/components/hazard-feed";
+import { TONE_LABEL, scoreHeadline } from "@/lib/sentiment";
+import { translateToEn } from "@/lib/translate";
 import { cn } from "@/lib/utils";
 
 function relative(iso: string | null): string {
@@ -28,6 +30,32 @@ function relative(iso: string | null): string {
   if (mins < 60) return `${mins}m ago`;
   if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
   return `${Math.round(mins / 1440)}d ago`;
+}
+
+function TranslateBit({ text }: { text: string }) {
+  const [out, setOut] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <span className="mt-1 block">
+      <button
+        type="button"
+        className="font-mono text-[10px] tracking-wider text-accent"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (out || busy) return;
+          setBusy(true);
+          void translateToEn({ data: { text } })
+            .then((r) => setOut(r.translated))
+            .catch(() => setOut(text))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {busy ? "…" : out ? "EN" : "TRANSLATE"}
+      </button>
+      {out ? <span className="mt-1 block text-xs text-muted">{out}</span> : null}
+    </span>
+  );
 }
 
 export function NewsPanel({ data, loading }: { data: NewsFeed | null; loading: boolean }) {
@@ -64,10 +92,16 @@ export function NewsPanel({ data, loading }: { data: NewsFeed | null; loading: b
                 <span className="shrink-0 font-mono">{relative(item.date)}</span>
               </span>
               <span className="flex items-start gap-1.5 text-sm leading-snug">
-                {item.title}
+                <span className="mt-0.5 shrink-0 font-mono text-[9px] tracking-wider text-subtle">{TONE_LABEL[scoreHeadline(item.title)]}</span>
+                <span className="min-w-0 flex-1">{item.title}</span>
                 <ExternalLink className="mt-0.5 size-3 shrink-0 text-subtle" />
               </span>
             </a>
+            {/[^\u0000-\u007F]/.test(item.title) ? (
+              <div className="px-3 pb-2">
+                <TranslateBit text={item.title} />
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>
@@ -599,9 +633,12 @@ export function ReportsList({
                 <span className="font-mono">{r.date}</span>
               </span>
               <span className="text-sm leading-snug">{r.title}</span>
+              <span className="font-mono text-[10px] tracking-wider text-thermal">ARCHIVE POST · not an AHSR assessment</span>
               <span className="text-xs text-subtle">
-                {r.place}, {r.country} · {r.sourceLabel}
+                {r.place}, {r.country} · {r.sourceLabel} · {r.date}
+                {r.sourceUrl ? " · source linked" : ""}
               </span>
+              <span className="text-[11px] text-subtle">AHSR has not independently confirmed this.</span>
             </button>
           </li>
         ))}
@@ -632,6 +669,11 @@ export function ReportDetail({ report, onBack }: { report: OsintReport; onBack: 
         />
       ) : null}
       <p className="mt-3 text-sm leading-relaxed text-muted">{report.summary}</p>
+      <p className="mt-2 font-mono text-[10px] tracking-wider text-thermal">ARCHIVE POST · ingested published post — not an AHSR assessment</p>
+      <p className="text-[11px] text-subtle">
+        {report.sourceLabel}
+        {report.sourceUrl ? ` · ${report.sourceUrl}` : ""} · {report.date}. AHSR has not independently confirmed this.
+      </p>
       <p className="mt-3 rounded-lg border border-border bg-raised p-2 text-xs leading-relaxed text-subtle">
         {CONFIDENCE_RUBRIC[report.confidence]} Source:{" "}
         {report.sourceUrl ? (
@@ -891,7 +933,7 @@ export function DetectPanel({
             <div className="h-full bg-accent" style={{ width: `${coincidence.score}%` }} />
           </div>
           <p className="mt-1 text-[10px] leading-tight text-subtle">
-            War-Probability-OSINT fusion idea, public signals only — not a forecast.
+            Weak-signal co-occurrence of public feeds. Not a war forecast. Not a confirmed alert.
           </p>
         </div>
       ) : null}
@@ -943,7 +985,7 @@ export function DetectPanel({
                     <span className="block truncate text-[11px] text-fg">{h.title}</span>
                     <span className="font-mono text-[10px] text-subtle">
                       {h.id.startsWith("det-scan-") ? "SCAN · " : ""}
-                      {meta.short} · c{h.confidence}
+                      {meta.short} · c{Math.min(2, h.confidence)}
                       {h.change != null ? ` · Δ${h.change}` : ""}
                       {h.cloud !== "unknown" ? ` · ${h.cloud}` : ""}
                     </span>

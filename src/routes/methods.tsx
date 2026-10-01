@@ -53,12 +53,15 @@ function Methods() {
 
       <h2>Thermal / FIRMS</h2>
       <p>
-        NASA FIRMS VIIRS 375 m (NOAA-20 and NOAA-21 24-hour public CSVs) is ingested server-side,
-        clipped to the Sudan-plus-corridors AOI, and deduped. FIRMS is a thermal-anomaly feed, not
-        a strike feed. Each point is classified agricultural, industrial, urban structure fire,
-        possible explosive/combat-related, or unknown. Combat-related labels above “possible”
-        require optical follow-up. Agricultural burning, oil flares, brick kilns, and gas flares
-        are first-class negative evidence.
+        NASA FIRMS VIIRS 375 m (NOAA-20 and NOAA-21 public CSVs, 24 h / 48 h / 7 d, MODIS if VIIRS
+        is empty) is ingested server-side, clipped to the Sudan-plus-corridors box, and deduped at
+        about 375 m. No FIRMS_MAP_KEY is required for those CSVs. If the host is unreachable, the
+        CSV has no header, or the box contains no rows, the health chip turns red and states the
+        reason. A quiet zero while other feeds move is a desk failure, not a result. FIRMS is a
+        thermal-anomaly feed, not a strike feed. Each point is classified agricultural, industrial,
+        urban structure fire, possible explosive/combat-related, or unknown. Combat-related does not
+        exceed “possible” without optical follow-up. Agricultural burning, oil flares, brick kilns,
+        and gas flares are first-class negative evidence.
       </p>
 
       <h2>Flights</h2>
@@ -74,6 +77,31 @@ function Methods() {
         ADS-B coverage in Darfur, Kordofan, Blue Nile, and the Libya desert tracks is sparse.
         Absence of a track is not absence of a flight. Coverage gaps are marked on the health
         chips. Scheduled passenger services are low priority unless they divert to unusual fields.
+      </p>
+
+      <h2>Ships — live AIS versus lane markers</h2>
+      <p>
+        Two layers, on purpose. <strong>Vessels (AIS)</strong> are positions from a public feed
+        with an update age. The only keyless live feed wired today is the Strait of Hormuz Ship
+        Monitor (Persian Gulf, Hormuz, Gulf of Oman). Those contacts are not Red Sea ships.
+        Named corridors — Port Sudan, Suakin, Tokar, Trinkitat, Jeddah, Yanbu, Bab el-Mandeb —
+        stay an <strong>AIS gap</strong> until a licensed public stream (AISStream or equivalent)
+        is configured. The desk says “AIS not configured” rather than inventing hulls. Kufra is
+        land; freight smear and ADS-B cover it, not drawings of ships.
+      </p>
+      <p>
+        <strong>Lane markers</strong> crawl along documented corridors so the sea is not a blank.
+        They are labeled NOT LIVE AIS. Category on a real AIS contact is typical-for-type
+        (tanker, cargo, other). It is never a claim about cargo contents or arms.
+      </p>
+
+      <h2>Sentinel-1</h2>
+      <p>
+        Sentinel-1 RTC browse (public Planetary Computer scene, not a commercial SAR stack) sits
+        next to optical in the basemap row. It is there for cloud gaps over Darfur and Kordofan.
+        A cloudy Sentinel-2 granule is a coverage gap, not a negative, and the cloud chip says so.
+        S1 does not identify vehicles, does not prove a damage type, and speckle is not wreckage.
+        DET boxes do not run on this layer. One scene is not a mosaic.
       </p>
 
       <h2 id="colab">Train a better chip model on Google Colab</h2>
@@ -135,15 +163,22 @@ function Methods() {
       <h2>Open reporting & control</h2>
       <p>
         Google News RSS (Sudan + RSF/SAF/Darfur/Kordofan query, last 4 days) is geocoded against a
-        town gazetteer. Pins are named-place centroids — not incident coordinates. A Grok analyst
-        brief runs only when you press the button; it is a lead list, not confirmation. Territorial
-        control polygons are a coarse regional snapshot as of August 2026 aggregated from published
-        assessments. They are not a live frontline.
+        town gazetteer. Pins are named-place centroids — not incident coordinates. The news panel
+        says so. A Grok analyst brief runs only when you press the button; it is a lead list, not
+        confirmation. Territorial control polygons are a coarse regional snapshot with an as-of
+        date and a source list. They are not a live frontline.
+      </p>
+      <p>
+        Open conflict cites are a shipped citation file of already-published points (dataset id,
+        date, type, source URL). They are corroboration only — not live ACLED or UCDP, not
+        verified by AHSR, and they cannot open a confirmed alert by themselves. If an official
+        public token is later configured it may replace the file; a blocked API is not scraped.
       </p>
       <p>
         Seeded OSINT reports (Asosa IL-76, ENDF compound change detection, Bahir Dar shelters,
-        Wadi Sayyidna hangar damage, Kurmuk) are published posts by named accounts, ingested as
-        documentation — not original assessments by this archive.
+        Wadi Sayyidna hangar damage, El Fasher, Zamzam, Kurmuk) are published posts by named
+        accounts, ingested as documentation — not original assessments by this archive. The card,
+        the map popup, and the export say “ingested published post — not an AHSR assessment.”
       </p>
 
       <h2>Alerts</h2>
@@ -180,9 +215,10 @@ function Methods() {
       <p>
         Resolution gate: HLS is ~30 m. Compact bright pixels are labelled unresolved objects, never
         a vehicle or aircraft census. High-res Esri is morphology only and is not a dated scene.
-        Sentinel-1 SAR is not in this sweep — clouded Darfur is a coverage gap, not a negative.
+        Sentinel-1 is available as a separate cloud-gap layer and is not used for vehicle census
+        or DET boxes. Freight smear on OSM roads is “possible moving vehicles · not a count.”
         Agricultural FIRMS is negative evidence. Confirm / reject / needs-imagery is the
-        active-learning loop.
+        active-learning loop. Auto boxes stay confidence 1 or 2 until a human confirms.
       </p>
 
       <h2>Reproducibility</h2>

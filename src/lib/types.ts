@@ -1,4 +1,4 @@
-export type ImagerySource = "s2" | "viirs" | "s2cloudless" | "hires" | "gmaps" | "dark" | "osm" | "night";
+export type ImagerySource = "s2" | "s1" | "viirs" | "s2cloudless" | "hires" | "gmaps" | "dark" | "osm" | "night";
 
 export const IMAGERY: Record<
   ImagerySource,
@@ -24,6 +24,13 @@ export const IMAGERY: Record<
     dated: true,
     note: "NASA HLS from Sentinel-2 MSI. ~30 m. Not every day; cloudy granules are empty. Latency about 2–4 days.",
     pickerNote: "Dated 30 m optical — cloudy granules are empty",
+  },
+  s1: {
+    label: "Sentinel-1 · SAR",
+    grain: "S1 RTC · one scene",
+    dated: true,
+    note: "Public Sentinel-1 RTC browse (Planetary Computer). Cloud-gap morphology only. Speckle is not wreckage. Not a vehicle census. DET does not run on this layer.",
+    pickerNote: "Dated SAR when optical is cloudy — one scene, not a mosaic",
   },
   s2cloudless: {
     label: "Sentinel-2 · 10 m",
@@ -230,6 +237,8 @@ export interface FlightEvent {
   relevant: boolean;
   live?: boolean;
   military?: boolean;
+  squawk?: string;
+  emergency?: boolean;
 }
 
 export interface VesselEvent {
@@ -244,6 +253,7 @@ export interface VesselEvent {
   destination: string;
   notes: string;
   live: boolean;
+  updatedAt?: string;
 }
 
 export interface ThermalEvent {

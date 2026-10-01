@@ -42,7 +42,10 @@ export type LayerKey =
   | "sats"
   | "eonet"
   | "launches"
-  | "freight";
+  | "freight"
+  | "grid"
+  | "lanes"
+  | "conflict";
 
 export type RightTab = "log" | "queue" | "news" | "brief" | "reports" | "feeds" | "fuae" | "rsf";
 
@@ -58,6 +61,8 @@ export interface FlyTarget {
   inspect?: boolean;
   /** Snap GIBS / HLS to this acquisition day when slewing. */
   date?: string;
+  /** Search: north-up, no pitch, so the point sits under the crosshair. */
+  flat?: boolean;
 }
 
 interface Review {
@@ -213,6 +218,9 @@ export const useAppStore = create<AppState>()(
         eonet: true,
         launches: true,
         freight: true,
+        grid: false,
+        lanes: true,
+        conflict: true,
       },
       imagery: "s2cloudless",
       date: daysAgo(4),
@@ -372,6 +380,7 @@ export const useAppStore = create<AppState>()(
                     zoom: flyTarget.zoom,
                     label: flyTarget.label,
                     date: dated ? day : undefined,
+                    flat: flyTarget.flat || undefined,
                   },
                 }),
               ),
@@ -456,6 +465,9 @@ export const useAppStore = create<AppState>()(
             eonet: p.layers?.eonet ?? true,
             launches: p.layers?.launches ?? true,
             freight: p.layers?.freight ?? true,
+            grid: p.layers?.grid ?? false,
+            lanes: p.layers?.lanes ?? true,
+            conflict: p.layers?.conflict ?? true,
           },
           controlUpdates: p.controlUpdates ?? [],
           fuaeLog: p.fuaeLog ?? [],

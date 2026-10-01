@@ -84,6 +84,16 @@ function classifyThermal(
   return "unknown";
 }
 
+function inFirmsBox(lat: number, lon: number): boolean {
+  if (lat >= 8 && lat <= 24 && lon >= 21 && lon <= 40) return true;
+  if (lat >= 22 && lat <= 28 && lon >= 30 && lon <= 36) return true;
+  if (lat >= 8 && lat <= 15 && lon >= 33 && lon <= 40) return true;
+  if (lat >= 8 && lat <= 16 && lon >= 15 && lon <= 24) return true;
+  if (lat >= 20 && lat <= 24 && lon >= 20 && lon <= 26) return true;
+  if (lat >= 12 && lat <= 23 && lon >= 36 && lon <= 44) return true;
+  return false;
+}
+
 function parseFirmsCsv(csv: string, satellite: string): ThermalEvent[] {
   const lines = csv.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
@@ -97,12 +107,13 @@ function parseFirmsCsv(csv: string, satellite: string): ThermalEvent[] {
   const iFrp = idx("frp");
   const iDn = idx("daynight");
   const iSat = idx("satellite");
+  if (iLat < 0 || iLon < 0) return [];
   const out: ThermalEvent[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = (lines[i] ?? "").split(",");
     const lat = Number(cols[iLat]);
     const lon = Number(cols[iLon]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !inAoi(lat, lon)) continue;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !inFirmsBox(lat, lon)) continue;
     const frp = Number(cols[iFrp] ?? 0) || 0;
     const daynight = ((cols[iDn] ?? "D") === "N" ? "N" : "D") as "D" | "N";
     const site = nearest(lat, lon, SITES, 6);
@@ -124,63 +135,90 @@ function parseFirmsCsv(csv: string, satellite: string): ThermalEvent[] {
   return out;
 }
 
-async function pullFirms(): Promise<{ rows: ThermalEvent[]; meta: LiveMeta }> {
-  const urls = [
-    {
-      sat: "NOAA-20",
-      url: "https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_24h.csv",
-    },
-    {
-      sat: "NOAA-21",
-      url: "https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_24h.csv",
-    },
+function firmsUrls(window: "24h" | "48h" | "7d"): { sat: string; url: string }[] {
+  const span = window;
+  return [
+    { sat: "NOAA-20", url: `https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_${span}.csv` },
+    { sat: "NOAA-21", url: `https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_${span}.csv` },
+    { sat: "MODIS", url: `https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_${span}.csv` },
   ];
-  const collected: ThermalEvent[] = [];
-  const notes: string[] = [];
-  for (const u of urls) {
-    try {
-      const csv = await fetchText(u.url, 14000);
-      const rows = parseFirmsCsv(csv, u.sat);
-      collected.push(...rows);
-      notes.push(`${u.sat} ${rows.length}`);
-    } catch (err) {
-      notes.push(`${u.sat} fail`);
-      console.warn("[firms]", u.sat, err);
-    }
+}
+
+async function pullOneFirm(
+  u: { sat: string; url: string },
+  window: "24h" | "48h" | "7d",
+): Promise<{ rows: ThermalEvent[]; note: string; ok: boolean }> {
+  try {
+    const csv = await fetchText(u.url, window === "7d" ? 45000 : 25000);
+    if (!csv.includes("latitude")) throw new Error("CSV missing header");
+    const rows = parseFirmsCsv(csv, u.sat);
+    return { rows, note: `${u.sat} ${rows.length}`, ok: true };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : "fail";
+    console.warn("[firms]", u.sat, err);
+    return { rows: [], note: `${u.sat} fail (${why})`, ok: false };
   }
+}
+
+async function pullFirms(window: "24h" | "48h" | "7d" = "24h"): Promise<{ rows: ThermalEvent[]; meta: LiveMeta }> {
+  const urls = firmsUrls(window);
+  const viirs = urls.filter((u) => u.sat !== "MODIS");
+  const modis = urls.find((u) => u.sat === "MODIS");
+  const first = await Promise.all(viirs.map((u) => pullOneFirm(u, window)));
+  const viirsRows = first.reduce((n, p) => n + p.rows.length, 0);
+  let parts = first;
+  if (viirsRows === 0 && modis) {
+    parts = [...first, await pullOneFirm(modis, window)];
+  }
+  const collected = parts.flatMap((p) => p.rows);
+  const notes = parts.map((p) => p.note);
+  const anyOk = parts.some((p) => p.ok);
   const dedup = new Map<string, ThermalEvent>();
   for (const r of collected) {
-    const k = `${r.acqDate}-${r.lat.toFixed(3)}-${r.lon.toFixed(3)}`;
+    const k = `${r.satellite}-${r.acqDate}-${(Math.round(r.lat / 0.003) * 0.003).toFixed(3)}-${(Math.round(r.lon / 0.003) * 0.003).toFixed(3)}`;
     const prev = dedup.get(k);
     if (!prev || r.frp > prev.frp) dedup.set(k, r);
   }
-  const rows = [...dedup.values()]
-    .filter((r) => {
-      if (nearest(r.lat, r.lon, SITES, 40)) return true;
-      return r.frp >= 14 && r.daynight === "N";
-    })
-    .sort((a, b) => b.frp - a.frp)
-    .slice(0, 420);
+  const rows = [...dedup.values()].sort((a, b) => b.frp - a.frp).slice(0, 800);
+  const latest = rows.map((r) => `${r.acqDate}T${r.acqTime}`).sort().at(-1) ?? "none";
+  if (!anyOk) {
+    return {
+      rows: [],
+      meta: meta(
+        "NASA FIRMS",
+        0,
+        `FIRMS gap · public CSV unreachable (${notes.join("; ")}). No FIRMS_MAP_KEY is set; area API was not used. Not a silent zero — the feed failed. Thermal anomaly ≠ strike.`,
+        "error",
+      ),
+    };
+  }
   if (rows.length === 0) {
     return {
-      rows: THERMAL.map((t) => ({ ...t, live: false })),
+      rows: [],
       meta: meta(
-        "NASA FIRMS VIIRS 24h CSV (archive fallback)",
-        THERMAL.length,
-        "Live FIRMS CSV unreachable. Showing curated archive points. FIRMS is a thermal-anomaly feed, not a strike feed.",
-        "stale",
+        "NASA FIRMS VIIRS/MODIS public CSV",
+        0,
+        `FIRMS gap · CSVs parsed but no points in the Sudan-plus-corridors box this ${window} (${notes.join(", ")}). Empty is a coverage result, not a negative. Not a strike feed.`,
+        "empty",
       ),
     };
   }
   return {
     rows,
     meta: meta(
-      "NASA FIRMS VIIRS 24h public CSV",
+      `NASA FIRMS public CSV ${window}`,
       rows.length,
-      `Deduped VIIRS NOAA-20/21 in AOI (${notes.join(", ")}). Thermal anomaly ≠ strike. Optical follow-up required before any combat-related label above possible.`,
+      `FIRMS ok · ${rows.length} points · last acq ${latest} UTC · ${notes.join(", ")}. Deduped ~375 m. Class is agricultural / industrial / urban / possible-explosive / unknown. Possible is the ceiling without optical follow-up. Not a strike pin.`,
     ),
   };
 }
+
+export const getFirmsWindow = createServerFn({ method: "GET" })
+  .inputValidator((data: { window?: "24h" | "48h" | "7d" }) => {
+    const window = data?.window === "48h" || data?.window === "7d" ? data.window : "24h";
+    return { window };
+  })
+  .handler(async ({ data }) => pullFirms(data.window === "48h" || data.window === "7d" ? data.window : "24h"));
 
 function classifyAirframe(type: string, category?: string): AirCategory {
   const t = (type || "").toUpperCase();
@@ -210,7 +248,13 @@ interface RawAc {
   gs?: number;
   track?: number;
   category?: string;
+  squawk?: string;
+  emergency?: string;
 }
+
+const MIL_CALL =
+  /^(RCH|SPAR|SAM|AF1|ASCOT|BAF|GAF|DUKE|NAVY|REACH|EVAC|CNV|CFC|IAM|SUD|KAF|UAE)/i;
+const MIL_TYPE = /C17|C130|C5|KC135|KC10|IL76|IL-76|AN12|AN124|A400|E3|P8|C30J|K35/;
 
 function inferRoute(ac: RawAc, lat: number, lon: number, track?: number): { origin: string; dest: string } {
   const near = nearestAirfieldName(lat, lon);
@@ -239,6 +283,14 @@ function toFlight(ac: RawAc, source: string): FlightEvent | null {
   const alt = typeof ac.alt_baro === "number" ? ac.alt_baro : Number(ac.alt_baro);
   const now = new Date().toISOString();
   const route = inferRoute(ac, lat, lon, ac.track);
+  const squawk = String(ac.squawk || "");
+  const emergency = squawk === "7700" || squawk === "7600" || squawk === "7500" || (ac.emergency != null && ac.emergency !== "none");
+  const military =
+    emergency ||
+    category === "cargo" ||
+    category === "tanker" ||
+    MIL_TYPE.test(typeCode) ||
+    MIL_CALL.test(callsign);
   return {
     id: `live-fl-${(ac.hex || `${lat}-${lon}`).toLowerCase()}`,
     hex: (ac.hex || "unknown").toLowerCase(),
@@ -255,12 +307,14 @@ function toFlight(ac: RawAc, source: string): FlightEvent | null {
     altFt: Number.isFinite(alt) ? alt : undefined,
     track: ac.track,
     gs: ac.gs,
+    squawk: squawk || undefined,
+    emergency,
     nearestAirfield: nearestAirfieldName(lat, lon),
-    notes: `Live ${source}. Category is airframe-typical, not a payload claim. ADS-B in this region is sparse — absence of a track is not absence of a flight.`,
+    notes: `Live ${source}. ${emergency ? `Squawk ${squawk}. ` : ""}Category is airframe-typical, not a payload claim. ADS-B in this region is sparse — absence of a track is not absence of a flight.`,
     confidence: 1,
     relevant: true,
     live: true,
-    military: category === "cargo" || category === "tanker" || /IL76|C130|C17|A400|AN12|KC135/.test(typeCode),
+    military,
   };
 }
 
@@ -305,29 +359,20 @@ async function pullOpenSky(): Promise<RawAc[]> {
 }
 
 async function pullFlights(): Promise<{ rows: FlightEvent[]; meta: LiveMeta }> {
+  // Four boxes, not sixteen. adsb.lol 429s when this desk fans out, and a 429
+  // looks identical to "tracking disappeared."
   const points: [number, number, number][] = [
-    [15.6, 32.5, 380],
-    [13.6, 25.3, 380],
-    [19.5, 37.2, 320],
-    [14.0, 35.4, 280],
-    [12.05, 24.88, 280],
-    [15.47, 36.4, 240],
-    [30.1, 31.4, 280],
-    [24.2, 23.3, 300],
-    [12.1, 15.0, 260],
-    [24.45, 54.65, 280],
     [25.25, 55.36, 220],
-    [25.11, 56.33, 180],
-    [2.03, 45.32, 260],
-    [10.4, 44.94, 220],
-    [13.07, 42.65, 220],
-    [21.5, 39.15, 260],
-    [29.0, 32.55, 200],
+    [30.05, 31.35, 180],
+    [21.54, 39.17, 180],
+    [8.98, 38.8, 160],
   ];
   const raw: RawAc[] = [];
   let source = "adsb.lol / adsb.fi";
-  const results = await Promise.all(points.map(([la, lo, d]) => pullAdsbPoint(la, lo, d)));
-  for (const batch of results) raw.push(...batch);
+  for (const [la, lo, d] of points) {
+    const batch = await pullAdsbPoint(la, lo, d);
+    raw.push(...batch);
+  }
   if (raw.length === 0) {
     const sky = await pullOpenSky();
     raw.push(...sky);
@@ -357,7 +402,7 @@ async function pullFlights(): Promise<{ rows: FlightEvent[]; meta: LiveMeta }> {
     meta: meta(
       source,
       rows.length,
-      "Live positions are ADS-B only. Large parts of Darfur, Kordofan, and the Libya tracks are coverage gaps. Category is typical for the airframe, never a cargo claim.",
+      "Live positions are ADS-B only (UAE, Egypt, Jeddah, Addis). Khartoum and Darfur are usually a coverage gap. Category is typical for the airframe, never a cargo claim.",
       rows.length < 3 ? "gap" : "ok",
     ),
   };
@@ -405,14 +450,71 @@ async function pullReports(): Promise<{ rows: Citation[]; meta: LiveMeta }> {
   }
 }
 
+async function pullHormuzAis(): Promise<VesselEvent[]> {
+  const text = await fetchText("https://hormuz.data-tracking.net/api/ships", 15000);
+  const json = JSON.parse(text) as {
+    mmsi?: string;
+    name?: string;
+    ship_category?: string;
+    flag?: string;
+    destination?: string;
+    latitude?: number;
+    longitude?: number;
+    zone?: string;
+    speed?: number;
+    course?: number;
+    timestamp?: string;
+  }[];
+  if (!Array.isArray(json)) return [];
+  const rows: VesselEvent[] = [];
+  for (const s of json) {
+    const lat = Number(s.latitude);
+    const lon = Number(s.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (lat < 22 || lat > 31 || lon < 47 || lon > 62) continue;
+    const mmsi = String(s.mmsi || `${lat.toFixed(3)}-${lon.toFixed(3)}`);
+    rows.push({
+      id: `ais-${mmsi}`,
+      name: (s.name || `MMSI ${mmsi}`).trim(),
+      lat,
+      lon,
+      flag: (s.flag || "unknown").toLowerCase(),
+      kind: "ais",
+      sog: Number.isFinite(Number(s.speed)) ? Number(s.speed) : 0,
+      cog: Number.isFinite(Number(s.course)) ? Number(s.course) : 0,
+      destination: s.destination || s.zone || "unspecified",
+      notes: `Live AIS · ${s.ship_category || "vessel"} · ${s.zone || "gulf"} · ${s.timestamp || ""}. Strait of Hormuz Ship Monitor (CC BY 4.0). Type is typical, not cargo contents. Not a Red Sea contact unless the position is west of 47E.`,
+      live: true,
+      updatedAt: s.timestamp,
+    });
+  }
+  return rows;
+}
+
 async function pullVessels(): Promise<{ rows: VesselEvent[]; meta: LiveMeta }> {
+  try {
+    const ais = await pullHormuzAis();
+    if (ais.length) {
+      return {
+        rows: ais,
+        meta: meta(
+          "Strait of Hormuz Ship Monitor",
+          ais.length,
+          "Live AIS in the Persian Gulf, Strait of Hormuz, and Gulf of Oman. Red Sea corridor markers on the map are still schematic — there is no keyless live AIS feed for that lane. Not a cargo claim.",
+          "ok",
+        ),
+      };
+    }
+  } catch (err) {
+    console.warn("[ais]", err);
+  }
   const rows = allVessels();
   return {
     rows,
     meta: meta(
       "Port nodes + documented Red Sea / Aden lane animation",
       rows.length,
-      "No keyless global AIS snapshot is wired. Port nodes are real harbours. Moving markers follow published shipping lanes so the maritime picture is not frozen — they are NOT live AIS contacts. Absence of a contact is not absence of a vessel.",
+      "Live Gulf AIS was unreachable this cycle. Port nodes are real harbours. Moving markers follow published shipping lanes — they are NOT live AIS contacts.",
       "gap",
     ),
   };
@@ -474,7 +576,7 @@ export const getTraffic = createServerFn({ method: "GET" }).handler(
     vessels: VesselEvent[];
     vesselsMeta: LiveMeta;
   }> => {
-    return cached("traffic", 18_000, async () => {
+    return cached("traffic", 45_000, async () => {
       const [flights, vessels] = await Promise.all([pullFlights(), pullVessels()]);
       return {
         flights: flights.rows,

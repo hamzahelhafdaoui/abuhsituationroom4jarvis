@@ -4,13 +4,14 @@ import { AlertTriangle, CircleHelp, ClipboardList, FileText, Layers, Minus, News
 import { ALERTS, FLIGHTS, OBSERVATIONS, SITES } from "@/data/catalog";
 import { VESSEL_SEED } from "@/data/regional-sites";
 import { ingestLive } from "@/lib/changelog";
-import { getLiveBundle, getTraffic, getGevWorld } from "@/lib/live";
+import { getLiveBundle, getTraffic, getGevWorld, getFirmsWindow } from "@/lib/live";
 import { getNewsFeed } from "@/lib/news";
 import { generateAiBrief } from "@/lib/ai-brief";
 import { compileSitrep, type Sitrep } from "@/lib/sitrep";
 import { composeBriefing } from "@/lib/briefing";
 import { fuseDetect, runDetect, type DetectHit, type DetectReport } from "@/lib/imagery-detect";
-import { allVessels, mergeFlights } from "@/lib/traffic";
+import { laneVessels, mergeFlights } from "@/lib/traffic";
+import { getTheaterMarkets, type MarketQuote } from "@/lib/markets";
 import { scanFuae, seedFuae, type FuaeRecord } from "@/lib/fuae";
 import type { Flag } from "@/lib/flags";
 import { SEED_REPORTS } from "@/lib/osint";
@@ -19,7 +20,7 @@ import { THEATER_BY_ID, THEATERS } from "@/lib/theaters";
 import { inspectFromFlag, inspectFromHit, inspectCam } from "@/lib/inspect-zoom";
 import { signalCoincidence } from "@/lib/fusion";
 import { VISTA_DIVS } from "@/lib/vista-map";
-import { IMAGERY, siteInKindGroup, type AiBrief, type FlightEvent, type LiveBundle, type ReviewState, type ThermalEvent } from "@/lib/types";
+import { IMAGERY, siteInKindGroup, type AiBrief, type FlightEvent, type LiveBundle, type LiveMeta, type ReviewState, type ThermalEvent } from "@/lib/types";
 import { useAppStore, useVisibleBoxes } from "@/lib/store";
 import { cn, daysAgo, mapCommand, mapFit, mapMeasure } from "@/lib/utils";
 import { MapCanvas } from "@/components/map-canvas";
@@ -33,6 +34,10 @@ import { refreshHazards } from "@/lib/hazard-state";
 import { useFreightState } from "@/lib/freight-state";
 import { LookTray } from "@/components/sensor-fx";
 import { BasemapPicker, LayerStack } from "@/components/map-chrome";
+import { FeedHealth } from "@/components/feed-health";
+import { getS1Scene } from "@/lib/s1";
+import { CONFLICT_CITES } from "@/data/conflict-events";
+import { parseCoord, searchPlaces, type PlaceHit } from "@/lib/geocode";
 
 const JUMP = [
   { id: "hsss", label: "Khartoum" },
@@ -130,10 +135,21 @@ export function Workspace() {
   const [briefLoading, setBriefLoading] = useState(false);
   const [sitrep, setSitrep] = useState<Sitrep | null>(null);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [markets, setMarkets] = useState<MarketQuote[]>([]);
+  const [firmsPack, setFirmsPack] = useState<{ rows: ThermalEvent[]; meta: LiveMeta; window: "24h" | "48h" | "7d" } | null>(null);
+  const [s1Scene, setS1Scene] = useState<{ tiles: string | null; note: string }>({
+    tiles: null,
+    note: "S1 idle — open Sentinel-1 in the optics row when S2 is cloudy. Speckle is not wreckage.",
+  });
   const [legendOpen, setLegendOpen] = useState(false);
   const [deskOpen, setDeskOpen] = useState(false);
   const [detectReport, setDetectReport] = useState<DetectReport | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [placeBusy, setPlaceBusy] = useState(false);
+  const [places, setPlaces] = useState<PlaceHit[]>([]);
+  const [placeErr, setPlaceErr] = useState<string | null>(null);
+  const [placeFor, setPlaceFor] = useState("");
+  const placeReq = useRef(0);
   const freightHits = useFreightState((s) => s.hits);
   const customReports = useAppStore((s) => s.customReports);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -202,7 +218,7 @@ export function Workspace() {
     setLiveError(null);
     const { next, added } = ingestLive(b, useAppStore.getState().changeLog);
     replaceLog(next);
-    ingestFuae(scanFuae(mergeFlights(b.flights), b.vessels?.length ? b.vessels : allVessels()));
+    ingestFuae(scanFuae(mergeFlights(b.flights), b.vessels?.length ? b.vessels : laneVessels()));
     setLastSweepAt(new Date().toISOString());
     setSitrep(
       compileSitrep({
@@ -252,7 +268,13 @@ export function Workspace() {
         if (!prev) {
           return {
             firms: [],
-            firmsMeta: n.meta,
+            firmsMeta: {
+              fetchedAt: new Date().toISOString(),
+              recordCount: 0,
+              status: "empty",
+              source: "NASA FIRMS",
+              note: "FIRMS loading public VIIRS CSV. Zero is not a result yet.",
+            },
             flights: [],
             flightsMeta: n.meta,
             reports: [],
@@ -306,7 +328,7 @@ export function Workspace() {
               ? { ...prev, quakes: g.quakes, sats: g.sats, eonet: g.eonet, launches: g.launches }
               : {
                   firms: [],
-                  firmsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
+                  firmsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "NASA FIRMS", note: "FIRMS loading public VIIRS CSV. Zero is not a result yet." },
                   flights: [],
                   flightsMeta: { fetchedAt: new Date().toISOString(), recordCount: 0, status: "empty", source: "gev", note: "" },
                   reports: [],
@@ -358,7 +380,13 @@ export function Workspace() {
             if (!prev) {
               return {
                 firms: [],
-                firmsMeta: t.flightsMeta,
+                firmsMeta: {
+                  fetchedAt: new Date().toISOString(),
+                  recordCount: 0,
+                  status: "empty",
+                  source: "NASA FIRMS",
+                  note: "FIRMS loading public VIIRS CSV. Zero is not a result yet.",
+                },
                 flights: mergeFlights(t.flights),
                 flightsMeta: t.flightsMeta,
                 reports: [],
@@ -389,19 +417,38 @@ export function Workspace() {
               vesselsMeta: t.vesselsMeta,
             };
           });
-          ingestFuae(scanFuae(mergeFlights(t.flights), t.vessels.length ? t.vessels : allVessels()));
+          ingestFuae(scanFuae(mergeFlights(t.flights), t.vessels.length ? t.vessels : laneVessels()));
         })
         .catch(() => {
           /* coverage gap is the default, not an error toast */
         });
     };
     poll();
-    const id = window.setInterval(poll, 20_000);
+    const id = window.setInterval(poll, 45_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
   }, [ingestFuae]);
+
+  useEffect(() => {
+    let stop = false;
+    const load = () => {
+      getTheaterMarkets()
+        .then((rows) => {
+          if (!stop) setMarkets(rows);
+        })
+        .catch(() => {
+          /* tape stays blank */
+        });
+    };
+    load();
+    const id = window.setInterval(load, 15 * 60 * 1000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     const show = () => {
@@ -434,12 +481,97 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKey);
   }, [setSelectedAlert, setSelectedSite]);
 
-  const firms: ThermalEvent[] = live?.firms ?? [];
+  const firms: ThermalEvent[] = firmsPack?.rows ?? live?.firms ?? [];
+  const firmsMeta = firmsPack?.meta ?? live?.firmsMeta ?? null;
+  const firmsWindow = firmsPack?.window ?? "24h";
   const flights: FlightEvent[] = mergeFlights(live?.flights ?? [], FLIGHTS);
-  const vessels = allVessels();
+  const aisShips = (live?.vessels ?? []).filter((v) => v.kind === "ais" && v.live);
+  const vessels = [...aisShips, ...VESSEL_SEED];
+  const liveFlightCount = flights.filter((f) => f.live).length;
+  const freshAis = aisShips.filter((v) => {
+    const t = v.updatedAt ? Date.parse(v.updatedAt) : NaN;
+    return Number.isFinite(t) && Date.now() - t < 30 * 60 * 1000 && Date.now() - t >= 0;
+  });
+  const liveShipCount = freshAis.length;
   const gdelt = live?.gdelt?.length ? live.gdelt : GDELT_ARCHIVE;
   const osm = live?.osm?.length ? live.osm : OSM_SEED;
   const feeds = live?.feeds?.length ? live.feeds : FEED_SEED;
+
+  useEffect(() => {
+    if (imagery !== "s1") return;
+    let stop = false;
+    setS1Scene((prev) => ({ tiles: prev.tiles, note: `S1 searching public RTC near ${date}…` }));
+    getS1Scene({ data: { date } })
+      .then((s) => {
+        if (!stop) setS1Scene({ tiles: s.tiles, note: s.note });
+      })
+      .catch((err: unknown) => {
+        if (!stop) {
+          setS1Scene({
+            tiles: null,
+            note: `S1 gap · ${err instanceof Error ? err.message : "request failed"}. Not a negative. DET does not run on SAR.`,
+          });
+        }
+      });
+    return () => {
+      stop = true;
+    };
+  }, [imagery, date]);
+
+  useEffect(() => {
+    let stop = false;
+    getFirmsWindow({ data: { window: "24h" } })
+      .then((r) => {
+        if (!stop) setFirmsPack({ rows: r.rows, meta: r.meta, window: "24h" });
+      })
+      .catch((err: unknown) => {
+        if (!stop) {
+          setFirmsPack({
+            rows: [],
+            window: "24h",
+            meta: {
+              fetchedAt: new Date().toISOString(),
+              recordCount: 0,
+              status: "error",
+              source: "NASA FIRMS",
+              note: `FIRMS gap · ${err instanceof Error ? err.message : "request failed"}. Public CSV did not return. Not a silent zero. Not a strike feed.`,
+            },
+          });
+        }
+      });
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  function loadFirms(window: "24h" | "48h" | "7d") {
+    setFirmsPack((prev) => ({
+      rows: prev?.rows ?? firms,
+      window,
+      meta: {
+        fetchedAt: new Date().toISOString(),
+        recordCount: (prev?.rows ?? firms).length,
+        status: prev?.meta.status ?? firmsMeta?.status ?? "empty",
+        source: "NASA FIRMS",
+        note: `FIRMS loading public ${window} CSV (NOAA-20, NOAA-21, then MODIS)…`,
+      },
+    }));
+    getFirmsWindow({ data: { window } })
+      .then((r) => setFirmsPack({ rows: r.rows, meta: r.meta, window }))
+      .catch((err: unknown) =>
+        setFirmsPack({
+          rows: [],
+          window,
+          meta: {
+            fetchedAt: new Date().toISOString(),
+            recordCount: 0,
+            status: "error",
+            source: "NASA FIRMS",
+            note: `FIRMS gap · ${err instanceof Error ? err.message : "request failed"}. Public CSV did not return. Not a silent zero. Not a strike feed.`,
+          },
+        }),
+      );
+  }
 
   useEffect(() => {
     if (selectedSiteId || selectedAlertId) setDeskOpen(true);
@@ -475,7 +607,13 @@ export function Workspace() {
 
   const searchHits = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (q.length < 2) return { siteHits: [] as typeof SITES, alertHits: [] as typeof ALERTS, vistaHits: [] as typeof VISTA_DIVS };
+    const coord = query.trim().match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
+    const coordHit = coord
+      ? { lat: Number(coord[1]), lon: Number(coord[2]) }
+      : null;
+    if (q.length < 2 && !coordHit) {
+      return { siteHits: [] as typeof SITES, alertHits: [] as typeof ALERTS, vistaHits: [] as typeof VISTA_DIVS, flightHits: [] as FlightEvent[], shipHits: [] as typeof vessels, coordHit: null as { lat: number; lon: number } | null };
+    }
     const siteHits = SITES.filter(
       (s) => s.name.toLowerCase().includes(q) || s.admin1.toLowerCase().includes(q) || s.kind.includes(q),
     ).slice(0, 6);
@@ -486,8 +624,104 @@ export function Workspace() {
         f.properties.nameAr.includes(query.trim()) ||
         (f.properties.place ?? "").toLowerCase().includes(q),
     ).slice(0, 6);
-    return { siteHits, alertHits, vistaHits };
+    const flightHits = flights
+      .filter((f) => f.hex.includes(q) || f.operator.toLowerCase().includes(q) || f.typeCode.toLowerCase().includes(q) || f.reg.toLowerCase().includes(q))
+      .slice(0, 5);
+    const shipHits = vessels
+      .filter((v) => v.name.toLowerCase().includes(q) || v.id.toLowerCase().includes(q))
+      .slice(0, 4);
+    return { siteHits, alertHits, vistaHits, flightHits, shipHits, coordHit };
+  }, [query, flights, vessels]);
+
+  useEffect(() => {
+    const q = query.trim();
+    const n = ++placeReq.current;
+    if (q.length < 2 || parseCoord(q)) {
+      setPlaces([]);
+      setPlaceFor("");
+      setPlaceBusy(false);
+      setPlaceErr(null);
+      return;
+    }
+    setPlaceBusy(true);
+    const t = window.setTimeout(() => {
+      searchPlaces({ data: { q } })
+        .then((rows) => {
+          if (placeReq.current !== n) return;
+          setPlaces(rows);
+          setPlaceFor(q);
+          setPlaceErr(null);
+        })
+        .catch(() => {
+          if (placeReq.current !== n) return;
+          setPlaces([]);
+          setPlaceErr("Place search unavailable");
+        })
+        .finally(() => {
+          if (placeReq.current === n) setPlaceBusy(false);
+        });
+    }, 280);
+    return () => window.clearTimeout(t);
   }, [query]);
+
+  function flySearch(lat: number, lon: number, zoom: number, label: string) {
+    setFlyTarget({ lat, lon, zoom, label, flat: true });
+    setQuery("");
+    setSearchOpen(false);
+  }
+
+  async function goSearch() {
+    const q = query.trim();
+    if (!q) return;
+    const coord = parseCoord(q);
+    if (coord) {
+      flySearch(coord.lat, coord.lon, 15.2, `${coord.lat.toFixed(4)}, ${coord.lon.toFixed(4)}`);
+      return;
+    }
+    let rows = placeFor === q ? places : [];
+    if (!rows.length) {
+      setPlaceBusy(true);
+      try {
+        rows = await searchPlaces({ data: { q } });
+        setPlaces(rows);
+        setPlaceFor(q);
+        setPlaceErr(null);
+      } catch {
+        setPlaceErr("Place search unavailable");
+        rows = [];
+      } finally {
+        setPlaceBusy(false);
+      }
+    }
+    const hit = rows[0];
+    if (hit) {
+      flySearch(hit.lat, hit.lon, hit.zoom, hit.name);
+      return;
+    }
+    const site = searchHits.siteHits[0];
+    if (site) {
+      setSelectedSite(site.id);
+      setSelectedAlert(null);
+      setQuery("");
+      setSearchOpen(false);
+      return;
+    }
+    const flight = searchHits.flightHits[0];
+    if (flight) {
+      flySearch(flight.lat, flight.lon, 9.5, flight.operator || flight.hex);
+      return;
+    }
+    const ship = searchHits.shipHits[0];
+    if (ship) {
+      flySearch(ship.lat, ship.lon, 8.5, ship.name);
+      return;
+    }
+    const vista = searchHits.vistaHits[0];
+    if (vista) {
+      const [lon, lat] = vista.geometry.coordinates;
+      flySearch(lat, lon, 12.4, vista.properties.name);
+    }
+  }
 
   const selectedSite = SITES.find((s) => s.id === selectedSiteId) ?? null;
   const selectedAlert = ALERTS.find((a) => a.id === selectedAlertId) ?? null;
@@ -555,6 +789,19 @@ export function Workspace() {
       setDetecting(false);
       return;
     }
+    if (imagery === "s1") {
+      setDetectReport({
+        hits: [],
+        ranAt: new Date().toISOString(),
+        opticalTried: 0,
+        opticalOk: 0,
+        gridTried: 0,
+        gridHits: 0,
+        note: "DET does not run on Sentinel-1. Speckle is not wreckage. Switch to Sentinel-2 or high-res for candidate boxes.",
+      });
+      setDetecting(false);
+      return;
+    }
     const args = {
       boxes,
       firms,
@@ -574,7 +821,7 @@ export function Workspace() {
       opticalOk: 0,
       gridTried: 0,
       gridHits: 0,
-      note: "Sweeping blank satellite tiles (Esri + Sentinel-2) for pads, yards, berms, change. Known pins scored in parallel.",
+      note: "Sweeping blank satellite tiles (Esri + Sentinel-2) for pads, yards, berms, change. Auto boxes stay confidence 1–2. Known pins scored in parallel.",
     });
     setDetecting(true);
     let cancelled = false;
@@ -591,7 +838,7 @@ export function Workspace() {
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detectOn, date, compareDate, boxes.length]);
+  }, [detectOn, date, compareDate, boxes.length, imagery]);
 
   function openDesk(tabId: typeof rightTab = "queue") {
     setDeskOpen(true);
@@ -683,6 +930,7 @@ export function Workspace() {
         sats={live?.sats ?? []}
         eonet={live?.eonet ?? []}
         launches={live?.launches ?? []}
+        s1Tiles={imagery === "s1" ? s1Scene.tiles : null}
       />
 
       <SitroomFx />
@@ -719,7 +967,13 @@ export function Workspace() {
           </Link>
 
           <div className="pointer-events-auto relative min-w-0 flex-1">
-            <label className="hud-panel relative block">
+            <form
+              className="hud-panel relative z-40 block"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void goSearch();
+              }}
+            >
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" />
               <input
                 ref={searchRef}
@@ -729,12 +983,77 @@ export function Workspace() {
                   setSearchOpen(true);
                 }}
                 onFocus={() => setSearchOpen(true)}
-                placeholder="Jump to a site, division, or alert  ·  /"
-                className="h-11 w-full bg-transparent pl-10 pr-3 text-sm text-fg placeholder:text-subtle"
+                placeholder="City, village, state, or lat, lon  ·  /"
+                aria-label="Search any place or coordinates"
+                className="h-11 w-full bg-transparent pl-10 pr-[4.6rem] text-sm text-fg placeholder:text-subtle"
               />
-            </label>
-            {searchOpen && query.trim().length >= 2 && (searchHits.siteHits.length + searchHits.alertHits.length + searchHits.vistaHits.length) > 0 ? (
-              <div className="hud-panel absolute inset-x-0 top-[calc(100%+6px)] z-30 overflow-hidden py-1">
+              <button
+                type="submit"
+                className="absolute right-1.5 top-1/2 h-8 -translate-y-1/2 rounded-md bg-accent px-2.5 font-mono text-[10px] tracking-wider text-accent-fg"
+              >
+                Search
+              </button>
+            </form>
+            {searchOpen && query.trim().length >= 2 ? (
+              <div className="hud-panel absolute inset-x-0 top-[calc(100%+6px)] z-30 max-h-80 overflow-auto py-1">
+                {searchHits.coordHit ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-raised"
+                    onClick={() => {
+                      flySearch(searchHits.coordHit!.lat, searchHits.coordHit!.lon, 15.2, "coordinates");
+                    }}
+                  >
+                    <span>Go to coordinates</span>
+                    <span className="font-mono text-xs text-subtle">{searchHits.coordHit.lat.toFixed(3)}, {searchHits.coordHit.lon.toFixed(3)}</span>
+                  </button>
+                ) : null}
+                {places.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-raised"
+                    onClick={() => flySearch(p.lat, p.lon, p.zoom, p.name)}
+                  >
+                    <span className="min-w-0 truncate">{p.name}</span>
+                    <span className="shrink-0 text-xs text-subtle">{p.label}</span>
+                  </button>
+                ))}
+                {placeBusy ? (
+                  <p className="px-3 py-2 text-xs text-subtle">Searching places…</p>
+                ) : null}
+                {!placeBusy && placeErr ? (
+                  <p className="px-3 py-2 text-xs text-subtle">{placeErr}</p>
+                ) : null}
+                {!placeBusy && !placeErr && !searchHits.coordHit && places.length === 0 && searchHits.siteHits.length + searchHits.alertHits.length + searchHits.vistaHits.length + searchHits.flightHits.length + searchHits.shipHits.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-subtle">No place found. Try a city, village, state, or lat, lon.</p>
+                ) : null}
+                {searchHits.flightHits.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-raised"
+                    onClick={() => {
+                      flySearch(f.lat, f.lon, 9.5, f.operator || f.hex);
+                    }}
+                  >
+                    <span>{f.operator !== "unknown" ? f.operator : f.hex}</span>
+                    <span className="font-mono text-xs text-subtle">{f.emergency ? "EMERG" : f.military ? "MIL" : "AIR"} · {f.typeCode}</span>
+                  </button>
+                ))}
+                {searchHits.shipHits.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-raised"
+                    onClick={() => {
+                      flySearch(v.lat, v.lon, 8.5, v.name);
+                    }}
+                  >
+                    <span>{v.name}</span>
+                    <span className="font-mono text-xs text-subtle">{v.live ? "AIS" : v.kind}</span>
+                  </button>
+                ))}
                 {searchHits.siteHits.map((s) => (
                   <button
                     key={s.id}
@@ -758,9 +1077,7 @@ export function Workspace() {
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-raised"
                     onClick={() => {
                       const [lon, lat] = f.geometry.coordinates;
-                      setFlyTarget({ lat, lon, zoom: 12.4, label: f.properties.name });
-                      setQuery("");
-                      setSearchOpen(false);
+                      flySearch(lat, lon, 12.4, f.properties.name);
                     }}
                   >
                     <span>{f.properties.name}</span>
@@ -868,10 +1185,63 @@ export function Workspace() {
               </button>
             ))}
           </div>
+          <div className="pointer-events-auto flex flex-wrap gap-1">
+            <button
+              type="button"
+              title="Live ADS-B. Coverage is UAE, Egypt, Jeddah, Addis — not Khartoum or Darfur."
+              onClick={() => setFlyTarget({ lat: 25.15, lon: 55.2, zoom: 6.4, label: "UAE air picture" })}
+              className="h-8 border border-accent/50 bg-bg/80 px-2.5 font-mono text-[10px] tracking-wider text-accent backdrop-blur-sm hover:bg-accent hover:text-accent-fg"
+            >
+              AIR {liveFlightCount} LIVE
+            </button>
+            <button
+              type="button"
+              title="Gulf AIS under 30 min from the Hormuz public feed. Red Sea corridors are not this layer. Lane markers are NOT LIVE AIS."
+              onClick={() => setFlyTarget({ lat: 26.3, lon: 55.8, zoom: 5.8, label: "Gulf AIS" })}
+              className="h-8 border border-accent/50 bg-bg/80 px-2.5 font-mono text-[10px] tracking-wider text-accent backdrop-blur-sm hover:bg-accent hover:text-accent-fg"
+            >
+              GULF {liveShipCount} AIS
+            </button>
+            <span
+              title="Port Sudan, Suakin, Tokar, Trinkitat, Jeddah, Yanbu, Bab el-Mandeb. No AISStream key. Drawings on those lanes are not ships."
+              className="inline-flex h-8 items-center border border-rsf/60 bg-bg/80 px-2.5 font-mono text-[10px] tracking-wider text-rsf"
+            >
+              RED SEA AIS GAP
+            </span>
+            {markets.map((m) => (
+              <span
+                key={m.symbol}
+                title="Public quote. Context for the theater, not a market call."
+                className="inline-flex h-8 items-center border border-border bg-bg/70 px-2 font-mono text-[10px] tracking-wider text-muted"
+              >
+                {m.label} {m.price.toFixed(m.price > 500 ? 0 : 2)}
+                <span className={m.changePct >= 0 ? "ml-1 text-accent" : "ml-1 text-rsf"}>
+                  {m.changePct >= 0 ? "+" : ""}
+                  {m.changePct.toFixed(1)}%
+                </span>
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className={cn("pointer-events-none absolute right-3 top-[11.5rem] z-20 md:top-[13.5rem]", deskOpen && "lg:right-[26.2rem]")}>
+      <div className={cn("pointer-events-none absolute right-3 top-[11.5rem] z-20 max-h-[calc(100dvh-12.5rem)] md:top-[13.5rem]", deskOpen && "lg:right-[26.2rem]")}>
+        <div className="pointer-events-auto max-h-[calc(100dvh-12.5rem)] overflow-y-auto">
+        <FeedHealth
+          firmsMeta={firmsMeta}
+          firmsN={firms.length}
+          firmsWindow={firmsWindow}
+          vessels={live?.vessels ?? []}
+          vesselsNote={live?.vesselsMeta?.note ?? "AIS ingest has not returned."}
+          flightsLive={liveFlightCount}
+          date={date}
+          s1Note={s1Scene.note}
+          cites={CONFLICT_CITES.length}
+          gdelt={gdelt.length}
+          news={live?.news.length ?? 0}
+          osmN={osm.length}
+          onFirms={loadFirms}
+        />
         <LayerStack
           counts={{
             ai: aiEvents.length,
@@ -880,7 +1250,7 @@ export function Workspace() {
             fires: firms.length,
             feeds: feeds.length,
             flights: flights.length,
-            vessels: vessels.length,
+            vessels: liveShipCount,
             quakes: live?.quakes.length ?? 0,
             sats: live?.sats.length ?? 0,
             eonet: live?.eonet.length ?? 0,
@@ -888,6 +1258,7 @@ export function Workspace() {
             freight: freightHits.length,
           }}
         />
+        </div>
       </div>
 
       <div className="pointer-events-none absolute bottom-24 left-3 top-[14rem] z-20 hidden w-60 md:block">
@@ -1079,7 +1450,7 @@ export function Workspace() {
                 <span className="text-fg">Double-click</span> the map to descend on that point. Site chips fly in with pitch and a lock box. <span className="text-fg">ORBIT</span> / O slowly circles the target. Q / E bank the view. R resets north.
               </li>
               <li>
-                <span className="text-fg">Contacts</span> are live ADS-B plus maritime lane markers that crawl along documented Red Sea / Aden / Suez corridors. Cargo-typical airframes paint amber. Lane markers are NOT live AIS — they move so the maritime picture is not frozen.
+                <span className="text-fg">Contacts</span> are live ADS-B (UAE, Egypt, Jeddah, Addis) and live Gulf / Hormuz AIS. Cargo-typical airframes paint amber. Red Sea lane markers still crawl the documented corridor — that waterway has no keyless live AIS, so those markers are not ships.
               </li>
               <li>
                 <span className="text-fg">DOCS</span> (next to HUD / DET, or the <span className="text-fg">Briefs · logs · news</span> pill) opens news, log, brief, FUAE, queue. Closed by default so the satellite is not covered.

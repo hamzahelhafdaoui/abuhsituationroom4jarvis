@@ -9,10 +9,14 @@ import { useAppStore } from "@/lib/store";
 
 export const CAVEAT = `LIMITATIONS — Abu Hureirah Situation Room (Sudan Wing) is a documentation archive, not a targeting system.
 - Sentinel-2 10 m cannot distinguish pickup vs technical vs civilian 4x4.
-- NASA FIRMS is a thermal-anomaly feed (375 m), not a strike feed. Agricultural burning, flares, and brick kilns are common false combat cues.
+- NASA FIRMS is a thermal-anomaly feed (375 m), not a strike feed. Agricultural burning, flares, and brick kilns are common false combat cues. A FIRMS gap (empty CSV, bbox miss, unreachable host) is a failure, not a silent zero and not a negative.
 - ADS-B coverage in Sudan and adjacent desert corridors is sparse. Absence of a track is not absence of a flight. Never infer cargo contents.
-- Party labels and control shading are assessments. They are not confirmed occupancy. Default new detections to confidence 1–2.
-- Control polygons are regional and time-bounded. Confirmed analyst clicks shift city markers — they do not draw a new frontline.
+- AIS type is typical-for-hull, never cargo contents. Lane markers are schematic corridor animation, labeled NOT LIVE AIS. Red Sea corridor AIS is not configured unless a public stream is attached. Gulf AIS is not a Red Sea contact.
+- Sentinel-1 RTC is morphology context when optical is cloudy. It does not identify vehicles or prove a damage type. Speckle is not wreckage. DET does not run on S1.
+- Open conflict pins are a shipped citation file, not live ACLED or UCDP event ids, and not an AHSR assessment.
+- Seeded archive cards are ingested published posts — not an AHSR assessment. News pins are named-place centroids.
+- Party labels and control shading are assessments. They are not confirmed occupancy. Default new detections to confidence 1–2. Auto boxes never display 4 or 5.
+- Control polygons are regional and time-bounded. They are not a live frontline.
 - Nothing is “confirmed” without a human review click.
 - Forbidden: targeting, fire control, strike planning, kill-chain language.`;
 
@@ -216,7 +220,7 @@ export function briefingHtml(flights: FlightEvent[], firms: ThermalEvent[], log:
 <h2>Live ingest snapshot</h2>
 <p>FIRMS points in AOI this cycle: ${firms.length}. Live flights: ${flights.filter((f) => f.live).length}. Observations in archive: ${OBSERVATIONS.length}. Sites: ${SITES.length}.</p>
 <h2>Methods appendix</h2>
-<p>Optical browse via NASA GIBS (VIIRS / HLS). Thermal from NASA FIRMS VIIRS 375 m. Flights from public ADS-B aggregators (adsb.lol, adsb.fi) with OpenSky fallback. Humanitarian corroboration via ReliefWeb. Control shading from compiled open-source maps plus analyst-confirmed city markers. Human review required. Default new detections to confidence 1–2. Analytical language: observation / identification / assessment / judgment. Confidence is not probability.</p>
+<p>Optical browse via NASA GIBS (VIIRS / HLS). Sentinel-1 RTC is a cloud-gap scene, not a vehicle layer. Thermal from NASA FIRMS VIIRS 375 m — a gap is not a negative and a point is not a strike. Flights from public ADS-B. AIS type is not cargo; lane markers are not live ships. Conflict cites are a shipped file, not live ACLED ids. Seeded cards are ingested published posts, not AHSR assessments. Human review required. Auto detections stay confidence 1–2. Analytical language: observation / identification / assessment / judgment. Confidence is not probability. Not a targeting product.</p>
 <footer>Abu Hureirah Situation Room · civilian archive · every page carries this caveat.</footer>
 </body></html>`;
 }

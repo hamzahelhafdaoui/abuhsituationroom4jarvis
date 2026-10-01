@@ -29,7 +29,7 @@ export function FreightDesk() {
       const r = await runFreightScan({ data: { lon, lat, sizeKm: size, date, windowDays } });
       setResult({ hits: r.detections, date: r.date, note: `${r.note} · ${r.roads} OSM road ways · scene ${r.sceneId}` });
       setStatus(
-        `${r.detections.length} large-vehicle smear candidates on ${r.date} (cloud ${r.cloud.toFixed(0)}%). Human verify. Not a type ID.`,
+        `${r.detections.length} smear candidates on ${r.date} — possible moving vehicles · not a count (cloud ${r.cloud.toFixed(0)}%).`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Freight scan failed");
@@ -50,8 +50,8 @@ export function FreightDesk() {
         ) : null}
       </div>
       <p className="mt-1 text-[11px] leading-snug text-subtle">
-        Counts large-vehicle motion smear on mapped highways from free Sentinel-2. Speed/heading are
-        smear geometry, ±15 km/h / ±22°. Cars are sub-pixel. Not cargo. Not a live feed.
+        Possible moving vehicles · not a count. Smear candidates on OSM motorway, trunk, and primary
+        roads from Sentinel-2 B02–B04. Speed and heading are smear geometry, not a vehicle census. Not cargo.
       </p>
       <div className="mt-2 flex flex-wrap gap-1">
         {FREIGHT_SITES.map((s) => (

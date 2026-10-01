@@ -33,11 +33,13 @@ function Ethics() {
 
       <h2>Public data only</h2>
       <p>
-        Ingest is limited to public satellite browse (NASA GIBS / Sentinel-2 L2A via Copernicus
-        when configured), NASA FIRMS, public ADS-B / OpenSky, and user-curated open reporting (UN,
-        OHCHR, Yale HRL, Bellingcat, Reuters, ACLED, official statements, already-verified
-        geolocated media). Paywalled commercial imagery is not scraped. User-uploaded commercial
-        scenes are allowed only if the researcher lawfully obtained them.
+        Ingest is limited to public satellite browse (NASA GIBS / Sentinel-2 HLS, public Sentinel-1
+        RTC for cloud gaps), NASA FIRMS public CSVs, public ADS-B / OpenSky, a keyless Gulf AIS
+        feed where one exists, and user-curated open reporting (UN, OHCHR, Yale HRL, Bellingcat,
+        Reuters, already-published citations, official statements). Paywalled commercial imagery
+        is not scraped. ACLED and UCDP are corroboration only; without a public token the desk
+        ships a citation file and does not pretend those rows are live event ids. Schematic
+        sea-lane markers are not ships. Absence of ADS-B, AIS, or FIRMS is not absence of activity.
       </p>
 
       <h2>Analytical doctrine</h2>
@@ -79,7 +81,11 @@ function Ethics() {
       <h2>Human review</h2>
       <p>
         Automation may open an alert. A human must confirm, reject, or mark “needs imagery.”
-        Party labels require a written reason and are audited. Confidence 5 is rare on purpose.
+        Party labels require a written reason and are audited (who, when, why). Confidence 5 is
+        rare on purpose. Auto detection boxes stay at 1 or 2 and never display 4 or 5. Archive
+        cards stay “ingested published post — not an AHSR assessment” until a human writes a
+        separate note. Coincidence is a weak-signal meter, not a war forecast and not a confirmed
+        alert.
       </p>
     </DocPage>
   );

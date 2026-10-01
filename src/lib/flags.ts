@@ -127,7 +127,7 @@ export function detectToFlags(hits: DetectHit[]): Flag[] {
               : "change",
       kind: "auto",
       sourceLabel: scan ? "imagery tile sweep" : "auto-find chip",
-      confidence: h.confidence,
+      confidence: Math.min(2, h.confidence) as 1 | 2,
       families: h.families,
       siteId: h.siteId,
       review: "unreviewed",

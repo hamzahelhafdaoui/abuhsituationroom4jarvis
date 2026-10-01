@@ -9,7 +9,7 @@ import { rsfWatchResolved } from "@/data/rsf-watch";
 import { vistaDivFc, vistaZonesFc } from "@/lib/vista-map";
 import type { FuaeRecord } from "@/lib/fuae";
 import { CORRIDORS, THEATER_BY_ID } from "@/lib/theaters";
-import { SEA_LANES, allVessels, deadReckon } from "@/lib/traffic";
+import { SEA_LANES, deadReckon, deadReckonVessel, laneVessels } from "@/lib/traffic";
 import {
   AOI,
   siteInKindGroup,
@@ -28,12 +28,13 @@ import { cn, snapshotUrl } from "@/lib/utils";
 import { cinematicFit, cinematicFly, pitchForZoom, spyEase } from "@/lib/spy-cam";
 import { inspectCam, inspectZoomForKlass } from "@/lib/inspect-zoom";
 import type { DetectKlass } from "@/lib/imagery-detect";
-import { LookFx } from "@/components/sensor-fx";
+import { CONFLICT_CITES } from "@/data/conflict-events";
 import { LOOK_RASTER, type LookId } from "@/lib/looks";
 import type { GevPin } from "@/lib/gev-world";
 import { useAnalysisArea } from "@/lib/analysis-area";
 import { useFreightState } from "@/lib/freight-state";
 import { useHazardState } from "@/lib/hazard-state";
+import { LookFx } from "@/components/sensor-fx";
 
 const PARTY_COLOR: Record<string, string> = {
   saf: "#7b93a6",
@@ -368,7 +369,7 @@ function detectFc(hits: DetectHit[]): FC {
 
 function runSlew(
   map: MlMap,
-  opts: { lon: number; lat: number; zoom: number; label?: string },
+  opts: { lon: number; lat: number; zoom: number; label?: string; flat?: boolean },
 ) {
   const go = () => {
     try {
@@ -455,13 +456,76 @@ function flightData(rows: FlightEvent[]): FC {
     category: r.category,
     hex: r.hex,
     military: !!r.military,
+    emergency: !!r.emergency,
     track: r.track ?? 0,
-    label: `${r.typeCode} ${r.reg === "unknown" ? r.hex.slice(0, 6) : r.reg}`,
+    label: `${r.emergency ? "EMERG " : ""}${r.typeCode} ${r.reg === "unknown" ? r.hex.slice(0, 6) : r.reg}`,
   }));
 }
 
+const trailMem = new Map<string, [number, number][]>();
+
+function trailFc(rows: FlightEvent[]): FC {
+  const features: FC["features"] = [];
+  const seen = new Set<string>();
+  for (const f of rows) {
+    if (!f.live) continue;
+    seen.add(f.hex);
+    const prev = trailMem.get(f.hex) ?? [];
+    const last = prev[prev.length - 1];
+    const moved = !last || Math.hypot(last[0] - f.lon, last[1] - f.lat) > 0.02;
+    const next = moved ? [...prev, [f.lon, f.lat] as [number, number]].slice(-16) : prev;
+    trailMem.set(f.hex, next);
+    if (next.length < 2) continue;
+    features.push({
+      type: "Feature",
+      properties: { hex: f.hex, emergency: !!f.emergency, military: !!f.military },
+      geometry: { type: "LineString", coordinates: next },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function gridFc(): FC {
+  const features: FC["features"] = [];
+  for (let lon = 20; lon <= 60; lon += 2) {
+    features.push({
+      type: "Feature",
+      properties: { label: `${lon}°E` },
+      geometry: { type: "LineString", coordinates: [[lon, 4], [lon, 32]] },
+    });
+  }
+  for (let lat = 6; lat <= 32; lat += 2) {
+    features.push({
+      type: "Feature",
+      properties: { label: `${lat}°N` },
+      geometry: { type: "LineString", coordinates: [[20, lat], [60, lat]] },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
 function vesselData(rows: VesselEvent[]): FC {
-  return pointFc(rows, (r) => ({ name: r.name, kind: r.kind, live: r.live, cog: r.cog ?? 0 }));
+  return pointFc(rows, (r) => ({
+    name: r.name,
+    kind: r.kind,
+    live: !!r.live,
+    cog: r.cog ?? 0,
+    sog: r.sog ?? 0,
+    dest: r.destination ?? "",
+    updated: r.updatedAt ?? "",
+    note: r.notes ?? "",
+    mmsi: r.id.replace(/^ais-/, ""),
+  }));
+}
+
+function paintVessels(rows: VesselEvent[], dtSec: number): FC {
+  const base = rows.filter((v) => v.kind !== "lane");
+  const moved = base.map((v) => (v.kind === "ais" ? deadReckonVessel(v, dtSec) : v));
+  return vesselData(moved);
+}
+
+function laneFc(): FC {
+  return vesselData(laneVessels(Date.now()));
 }
 
 function pct(lat: number, lon: number) {
@@ -541,10 +605,11 @@ interface Props {
   sats?: GevPin[];
   eonet?: GevPin[];
   launches?: GevPin[];
+  s1Tiles?: string | null;
 }
 
 export function MapCanvas({
-  boxes, firms, flights, panelOpen = false, reports = [], newsPoints = [], aiEvents = [], gdelt = [], osm = [], vessels = [], briefingOn = false, annotations = [], detections = [], fuae = [], quakes = [], sats = [], eonet = [], launches = [],
+  boxes, firms, flights, panelOpen = false, reports = [], newsPoints = [], aiEvents = [], gdelt = [], osm = [], vessels = [], briefingOn = false, annotations = [], detections = [], fuae = [], quakes = [], sats = [], eonet = [], launches = [], s1Tiles = null,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -552,10 +617,11 @@ export function MapCanvas({
   const ready = useRef(false);
   const hoverPopup = useRef<{ remove: () => void } | null>(null);
   const flightSnap = useRef({ rows: flights, at: Date.now() });
+  const vesselSnap = useRef({ rows: vessels, at: Date.now() });
   const [engine, setEngine] = useState<"static" | "gl">("static");
   const [cursor, setCursor] = useState("—");
   const [mapReady, setMapReady] = useState(false);
-  const pendingSlew = useRef<{ lon: number; lat: number; zoom: number; label?: string } | null>(null);
+  const pendingSlew = useRef<{ lon: number; lat: number; zoom: number; label?: string; flat?: boolean } | null>(null);
   const layers = useAppStore((s) => s.layers);
   const imagery = useAppStore((s) => s.imagery);
   const date = useAppStore((s) => s.date);
@@ -617,9 +683,9 @@ export function MapCanvas({
       (window as unknown as { __ahsrMap?: MlMap }).__ahsrMap = map;
       setEngine("gl");
       onSlewTo = (ev: Event) => {
-        const d = (ev as CustomEvent<{ lon: number; lat: number; zoom: number; label?: string; date?: string }>).detail;
+        const d = (ev as CustomEvent<{ lon: number; lat: number; zoom: number; label?: string; date?: string; flat?: boolean }>).detail;
         if (!map || !d || !Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
-        runSlew(map, { lon: d.lon, lat: d.lat, zoom: d.zoom ?? 15.4, label: d.label });
+        runSlew(map, { lon: d.lon, lat: d.lat, zoom: d.zoom ?? 15.4, label: d.label, flat: d.flat });
         if (d.date && /^\d{4}-\d{2}-\d{2}$/.test(d.date)) {
           window.setTimeout(() => {
             const s = useAppStore.getState();
@@ -657,7 +723,7 @@ export function MapCanvas({
         map.addLayer({ id: "boxes-fill", type: "fill", source: "boxes", paint: { "fill-color": "#d8d2c6", "fill-opacity": ["match", ["get", "priority"], "border", 0.04, 0.07] } });
         map.addLayer({ id: "boxes-line", type: "line", source: "boxes", paint: { "line-color": "#d8d2c6", "line-opacity": 0.5, "line-width": 1.4, "line-dasharray": [2, 2] } });
 
-        map.addSource("firms", { type: "geojson", data: pointFc(firmsNow, (r) => ({ klass: r.klass, frp: r.frp, live: !!r.live })) });
+        map.addSource("firms", { type: "geojson", data: pointFc(firmsNow, (r) => ({ klass: r.klass, frp: r.frp, live: !!r.live, satellite: r.satellite, confidence: r.confidence, daynight: r.daynight, acq: `${r.acqDate} ${r.acqTime}` })) });
         map.addLayer({ id: "firms-glow", type: "circle", source: "firms", paint: { "circle-radius": ["interpolate", ["linear"], ["get", "frp"], 0, 6, 40, 14], "circle-color": "#c4894a", "circle-opacity": 0.28, "circle-blur": 0.5 } });
         map.addLayer({ id: "firms-core", type: "circle", source: "firms", paint: { "circle-radius": 3.5, "circle-color": "#c4894a", "circle-stroke-width": 1, "circle-stroke-color": "#12110f" } });
 
@@ -667,8 +733,15 @@ export function MapCanvas({
           type: "circle",
           source: "flights",
           paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 5, 8, 8],
-            "circle-color": ["case", ["==", ["get", "military"], true], "#c4894a", "#d5e4dc"],
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 8, 10],
+            "circle-color": [
+              "case",
+              ["==", ["get", "emergency"], true],
+              "#ff5a5a",
+              ["==", ["get", "military"], true],
+              "#c4894a",
+              "#d5e4dc",
+            ],
             "circle-opacity": 0.85,
             "circle-stroke-width": 1.2,
             "circle-stroke-color": "#07090b",
@@ -679,8 +752,15 @@ export function MapCanvas({
           type: "symbol",
           source: "flights",
           layout: {
-            "icon-image": ["case", ["==", ["get", "military"], true], "plane-cargo", "plane-icon"],
-            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.85, 6, 1.25, 10, 1.55],
+            "icon-image": [
+              "case",
+              ["==", ["get", "emergency"], true],
+              "plane-cargo",
+              ["==", ["get", "military"], true],
+              "plane-cargo",
+              "plane-icon",
+            ],
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 1.05, 6, 1.4, 10, 1.7],
             "icon-rotate": ["to-number", ["get", "track"]],
             "icon-rotation-alignment": "map",
             "icon-allow-overlap": true,
@@ -692,8 +772,73 @@ export function MapCanvas({
           paint: { "text-color": "#e8f6ee", "text-halo-color": "#07090b", "text-halo-width": 1.2 },
         });
 
-        map.addSource("vessels", { type: "geojson", data: vesselData(allVessels()) });
-        map.addLayer({ id: "vessels", type: "circle", source: "vessels", paint: { "circle-radius": 4, "circle-color": "#7ec8b3", "circle-opacity": 0.55 } });
+        map.addSource("flight-trails", { type: "geojson", data: trailFc(flightsNow) });
+        map.addLayer({
+          id: "flight-trails",
+          type: "line",
+          source: "flight-trails",
+          paint: {
+            "line-color": ["case", ["==", ["get", "emergency"], true], "#ff5a5a", ["==", ["get", "military"], true], "#c4894a", "#9adbb8"],
+            "line-width": 1.4,
+            "line-opacity": 0.75,
+          },
+        });
+
+        map.addSource("surv-grid", { type: "geojson", data: gridFc() });
+        map.addLayer({
+          id: "surv-grid",
+          type: "line",
+          source: "surv-grid",
+          layout: { visibility: state.layers.grid ? "visible" : "none" },
+          paint: { "line-color": "#9adbb8", "line-width": 0.6, "line-opacity": 0.28 },
+        });
+        map.addSource("lane-markers", { type: "geojson", data: laneFc() });
+        map.addLayer({
+          id: "lane-markers",
+          type: "circle",
+          source: "lane-markers",
+          layout: { visibility: state.layers.lanes === false ? "none" : "visible" },
+          paint: { "circle-radius": 4, "circle-color": "#c4a574", "circle-opacity": 0.9, "circle-stroke-width": 1, "circle-stroke-color": "#07090b" },
+        });
+        map.addLayer({
+          id: "lane-labels",
+          type: "symbol",
+          source: "lane-markers",
+          layout: {
+            visibility: state.layers.lanes === false ? "none" : "visible",
+            "text-field": "NOT LIVE AIS",
+            "text-size": 9,
+            "text-offset": [0, 1.15],
+            "text-allow-overlap": false,
+          },
+          paint: { "text-color": "#c4a574", "text-halo-color": "#07090b", "text-halo-width": 1 },
+        });
+        map.addSource("conflict", {
+          type: "geojson",
+          data: pointFc(CONFLICT_CITES, (r) => ({ name: r.location, kind: r.eventType, note: r.note, url: r.sourceUrl, dataset: r.dataset, id: r.id, date: r.date })),
+        });
+        map.addLayer({
+          id: "conflict",
+          type: "circle",
+          source: "conflict",
+          layout: { visibility: state.layers.conflict === false ? "none" : "visible" },
+          paint: { "circle-radius": 5, "circle-color": "#d8d2c6", "circle-stroke-width": 1.4, "circle-stroke-color": "#07090b" },
+        });
+        map.addSource("s1", { type: "raster", tiles: ["https://planetarycomputer.microsoft.com/api/data/v1/item/tiles/WebMercatorQuad/{z}/{x}/{y}@1x.png?collection=sentinel-1-rtc&item=none"], tileSize: 256, maxzoom: 12, attribution: "Sentinel-1 RTC © Copernicus / Planetary Computer" });
+        map.addLayer({ id: "s1", type: "raster", source: "s1", layout: { visibility: "none" }, paint: { "raster-opacity": 0.92, "raster-fade-duration": 0 } });
+        map.addSource("vessels", { type: "geojson", data: vesselData(vesselSnap.current.rows.length ? vesselSnap.current.rows : vessels) });
+        map.addLayer({
+          id: "vessels",
+          type: "circle",
+          source: "vessels",
+          paint: {
+            "circle-radius": ["case", ["==", ["get", "live"], true], 5.5, 3.2],
+            "circle-color": ["case", ["==", ["get", "live"], true], "#3ddea0", "#7ec8b3"],
+            "circle-opacity": ["case", ["==", ["get", "live"], true], 0.95, 0.4],
+            "circle-stroke-width": 1,
+            "circle-stroke-color": "#07090b",
+          },
+        });
         map.addLayer({
           id: "vessels-icon",
           type: "symbol",
@@ -819,7 +964,7 @@ export function MapCanvas({
           paint: { "text-color": "#e8f6ee", "text-halo-color": "#07090b", "text-halo-width": 1.3 },
         });
 
-        map.addSource("osint-reports", { type: "geojson", data: pointFc(reports, (r) => ({ name: r.title, category: r.category })) });
+        map.addSource("osint-reports", { type: "geojson", data: pointFc(reports, (r) => ({ name: r.title, category: r.category, id: r.id, source: r.sourceLabel, url: r.sourceUrl ?? "", date: r.date, note: "ARCHIVE POST · ingested published post — not an AHSR assessment" })) });
         map.addLayer({ id: "osint-reports", type: "circle", source: "osint-reports", paint: { "circle-radius": 6, "circle-color": "#ece8e1", "circle-stroke-width": 2, "circle-stroke-color": "#b45a3c" } });
 
         map.addSource("news-pts", { type: "geojson", data: pointFc(newsPoints, (r) => ({ name: r.name, count: r.count })) });
@@ -996,8 +1141,8 @@ export function MapCanvas({
       });
       bindPopup("sites", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name ?? ""}</div>`);
       bindPopup("flights-icon", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.label ?? p.hex}<div style="opacity:.7;font-size:11px">ADS-B · not a cargo claim</div></div>`);
-      bindPopup("vessels-icon", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.kind === "lane" ? "Documented lane marker — not live AIS" : "Port node — not live AIS"}</div></div>`);
-      bindPopup("news-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name} · ${p.count} headlines<div style="opacity:.7;font-size:11px">Named-place centroid</div></div>`);
+      bindPopup("vessels-icon", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.live ? `Live AIS · MMSI ${p.mmsi} · SOG ${p.sog} · COG ${p.cog} · ${p.updated || "age unknown"} · type typical, not cargo` : p.kind === "lane" ? "NOT LIVE AIS · schematic corridor marker" : "Port node — not live AIS"}</div></div>`);
+      bindPopup("news-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name} · ${p.count} headlines<div style="opacity:.7;font-size:11px">Named-place centroid. Not an incident coordinate.</div></div>`);
       bindPopup("brief-pts", (p) => `<div style="max-width:260px;font:500 12px/1.4 'IBM Plex Sans',system-ui"><div>${p.title}</div><div style="opacity:.75;font-size:11px;margin-top:4px">${p.claim} · ${p.confidence}</div><div style="font-weight:400;font-size:11px;margin-top:6px">${p.paragraph ?? ""}</div><div style="opacity:.65;font-size:10px;margin-top:6px">${p.sources ?? ""}</div></div>`);
       bindPopup("rsf-watch", (p) => `<div style="max-width:260px;font:500 12px/1.4 'IBM Plex Sans',system-ui"><div>${p.name}</div><div style="opacity:.75;font-size:11px;margin-top:4px">RSF watch · ${p.why} · observation</div><div style="font-weight:400;font-size:11px;margin-top:6px">${p.note ?? ""}</div></div>`);
       bindPopup("vista-div", (p) => `<div style="max-width:280px;font:500 12px/1.4 'IBM Plex Sans',system-ui"><div>${p.name}</div><div style="opacity:.7;font-size:11px;margin-top:4px">${p.place ?? ""} · ${p.party === "rsf" ? "Amber pin on source map (RSF-held in copy)" : "Green pin on source map (SAF-held in copy)"}</div><div style="font-weight:400;font-size:11px;margin-top:6px">${p.note ?? ""}</div><div style="opacity:.65;font-size:10px;margin-top:6px">Vista copy · ${p.nameAr ?? ""} · not occupancy</div></div>`);
@@ -1029,7 +1174,8 @@ export function MapCanvas({
       bindPopup("sats", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "CelesTrak / ISS"}</div></div>`);
       bindPopup("eonet", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "NASA EONET"}</div></div>`);
       bindPopup("launches", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "Launch Library 2"}</div></div>`);
-      bindPopup("freight-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "Smear candidate"}</div></div>`);
+      bindPopup("osint-reports", (p) => `<div style="max-width:260px;font:500 12px/1.4 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.75;font-size:11px;margin-top:4px">ARCHIVE POST · ingested published post — not an AHSR assessment</div><div style="font-weight:400;font-size:11px;margin-top:4px">${p.source ?? ""} · ${p.date ?? ""}${p.url ? `<br/><a href="${p.url}" target="_blank" rel="noreferrer">source</a>` : ""}</div><div style="opacity:.7;font-size:11px;margin-top:4px">AHSR has not independently confirmed this.</div></div>`);
+      bindPopup("freight-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? "possible moving vehicles · not a count"}</div></div>`);
       bindPopup("hazard-pts", (p) => `<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p.name}<div style="opacity:.7;font-size:11px">${p.note ?? ""}</div></div>`);
       map.on("click", "detect-fill", (e) => {
         const f = e.features?.[0];
@@ -1104,10 +1250,31 @@ export function MapCanvas({
           inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 12.8, label: String(p?.name ?? "vessel") }),
         );
       });
-      map.on("click", "firms", (e) => {
-        useAppStore.getState().setFlyTarget(
-          inspectCam({ lat: e.lngLat.lat, lon: e.lngLat.lng, zoom: 13.4, label: "thermal", date: useAppStore.getState().date }),
-        );
+      map.on("click", "firms-core", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        if (!map) return;
+        hoverPopup.current?.remove();
+        hoverPopup.current = new Popup({ closeButton: true, offset: 10, className: "sr-popup" })
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">FIRMS · not a strike pin<div style="opacity:.75;font-size:11px;font-weight:400">FRP ${p?.frp ?? "—"} · ${p?.daynight === "N" ? "night" : "day"} · ${p?.satellite ?? ""} · conf ${p?.confidence ?? "—"}<br/>class ${p?.klass ?? "unknown"} · ${p?.acq ?? ""}<br/>Thermal anomaly only. Combat-related stays possible until optical follow-up.</div></div>`)
+          .addTo(map);
+      });
+      map.on("click", "conflict", (e) => {
+        const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
+        if (!map) return;
+        hoverPopup.current?.remove();
+        hoverPopup.current = new Popup({ closeButton: true, offset: 10, className: "sr-popup" })
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">${p?.name ?? "event"}<div style="opacity:.75;font-size:11px;font-weight:400">${p?.dataset} · ${p?.id}<br/>${p?.date} · ${p?.kind}<br/>${p?.note}<br/><a href="${p?.url}" target="_blank" rel="noreferrer">source</a> · not verified by AHSR</div></div>`)
+          .addTo(map);
+      });
+      map.on("click", "lane-markers", (e) => {
+        if (!map) return;
+        hoverPopup.current?.remove();
+        hoverPopup.current = new Popup({ closeButton: true, offset: 10, className: "sr-popup" })
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font:500 12px/1.35 'IBM Plex Sans',system-ui">NOT LIVE AIS<div style="opacity:.75;font-size:11px;font-weight:400">Schematic corridor marker. Documented lane animation so the Red Sea is not a blank. Not a ship.</div></div>`)
+          .addTo(map);
       });
       map.on("click", "control-fill", (e) => {
         const p = e.features?.[0]?.properties as Record<string, unknown> | undefined;
@@ -1221,7 +1388,6 @@ export function MapCanvas({
     if (!map || !ready.current) return;
     const visOn = (on: boolean): "visible" | "none" => (on ? "visible" : "none");
     const setVis = (id: string, on: boolean) => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visOn(on)); };
-    setVis("esri", imagery === "hires" || imagery === "s2" || imagery === "viirs");
     setVis("gmaps", imagery === "gmaps");
     setVis("osm", imagery === "osm");
     setVis("night", imagery === "night");
@@ -1237,9 +1403,16 @@ export function MapCanvas({
     setVis("firms-core", layers.firms);
     setVis("flights", layers.flights);
     setVis("flights-icon", layers.flights);
+    setVis("flight-trails", layers.flights);
+    setVis("surv-grid", layers.grid === true);
     setVis("vessels", layers.vessels);
     setVis("vessels-icon", layers.vessels);
-    setVis("sea-lanes", layers.vessels);
+    setVis("lane-markers", layers.lanes !== false);
+    setVis("lane-labels", layers.lanes !== false);
+    setVis("conflict", layers.conflict !== false);
+    setVis("esri", imagery === "hires" || imagery === "s2" || imagery === "viirs" || (imagery === "s1" && !s1Tiles));
+    setVis("s1", imagery === "s1" && Boolean(s1Tiles));
+    setVis("sea-lanes", layers.lanes !== false);
     setVis("corridors", layers.corridors);
     setVis("rsf-watch", layers.rsfWatch);
     setVis("rsf-watch-glow", layers.rsfWatch);
@@ -1273,7 +1446,7 @@ export function MapCanvas({
     setVis("launches", layers.launches !== false);
     setVis("freight-pts", layers.freight !== false);
     setVis("hazard-pts", true);
-  }, [layers, imagery, briefingOn, detectOn]);
+  }, [layers, imagery, briefingOn, detectOn, s1Tiles]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1282,6 +1455,12 @@ export function MapCanvas({
     (map.getSource("hls") as RasterTileSource | undefined)?.setTiles?.([hlsUrl(date)]);
     (map.getSource("thermal-raster") as RasterTileSource | undefined)?.setTiles?.([thermalUrl(date)]);
   }, [date]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current || !s1Tiles) return;
+    (map.getSource("s1") as RasterTileSource | undefined)?.setTiles?.([s1Tiles]);
+  }, [s1Tiles]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1294,8 +1473,27 @@ export function MapCanvas({
     const map = mapRef.current;
     if (!map || !ready.current) return;
     const src = map.getSource("firms");
-    if (src && "setData" in src) (src as { setData: (d: FC) => void }).setData(pointFc(firms, (r) => ({ klass: r.klass, frp: r.frp, live: !!r.live })));
+    if (src && "setData" in src) (src as { setData: (d: FC) => void }).setData(pointFc(firms, (r) => ({ klass: r.klass, frp: r.frp, live: !!r.live, satellite: r.satellite, confidence: r.confidence, daynight: r.daynight, acq: `${r.acqDate} ${r.acqTime}` })));
   }, [firms]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const src = map.getSource("osint-reports");
+    if (src && "setData" in src) {
+      (src as { setData: (d: FC) => void }).setData(
+        pointFc(reports, (r) => ({
+          name: r.title,
+          category: r.category,
+          id: r.id,
+          source: r.sourceLabel,
+          url: r.sourceUrl ?? "",
+          date: r.date,
+          note: "ARCHIVE POST · ingested published post — not an AHSR assessment",
+        })),
+      );
+    }
+  }, [reports]);
 
   useEffect(() => {
     flightSnap.current = { rows: flights, at: Date.now() };
@@ -1306,6 +1504,14 @@ export function MapCanvas({
   }, [flights]);
 
   useEffect(() => {
+    vesselSnap.current = { rows: vessels, at: Date.now() };
+    const map = mapRef.current;
+    if (!map || !ready.current) return;
+    const src = map.getSource("vessels");
+    if (src && "setData" in src) (src as { setData: (d: FC) => void }).setData(paintVessels(vessels, 0));
+  }, [vessels]);
+
+  useEffect(() => {
     const id = window.setInterval(() => {
       const map = mapRef.current;
       if (!map || !ready.current) return;
@@ -1313,8 +1519,14 @@ export function MapCanvas({
       const dt = (Date.now() - at) / 1000;
       const fs = map.getSource("flights");
       if (fs && "setData" in fs) (fs as { setData: (d: FC) => void }).setData(flightData(rows.map((f) => deadReckon(f, dt))));
+      const tr = map.getSource("flight-trails");
+      if (tr && "setData" in tr) (tr as { setData: (d: FC) => void }).setData(trailFc(rows));
       const vs = map.getSource("vessels");
-      if (vs && "setData" in vs) (vs as { setData: (d: FC) => void }).setData(vesselData(allVessels(Date.now())));
+      if (vs && "setData" in vs) {
+        (vs as { setData: (d: FC) => void }).setData(paintVessels(vesselSnap.current.rows, (Date.now() - vesselSnap.current.at) / 1000));
+      }
+      const lanes = map.getSource("lane-markers");
+      if (lanes && "setData" in lanes) (lanes as { setData: (d: FC) => void }).setData(laneFc());
     }, 700);
     return () => window.clearInterval(id);
   }, []);
@@ -1488,7 +1700,7 @@ export function MapCanvas({
   useEffect(() => {
     const t = flyTarget;
     if (t) {
-      pendingSlew.current = { lon: t.lon, lat: t.lat, zoom: t.zoom, label: t.label };
+      pendingSlew.current = { lon: t.lon, lat: t.lat, zoom: t.zoom, label: t.label, flat: t.flat };
       setFlyTarget(null);
     }
     const map = mapRef.current;
@@ -1540,7 +1752,7 @@ export function MapCanvas({
           freightHits.map((r, i) => ({ ...r, id: `fr-${i}` })),
           (r) => ({
             name: `${Math.round(r.speedKmh)} km/h ${r.headingDesc}`,
-            note: "S2 smear candidate · not a vehicle ID",
+            note: "possible moving vehicles · not a count",
           }),
         ),
       );
@@ -1599,6 +1811,7 @@ export function MapCanvas({
 
   const grain =
     imagery === "s2" ? `S2 HLS ${date}` :
+    imagery === "s1" ? `S1 SAR ${date}` :
     imagery === "viirs" ? `VIIRS ${date}` :
     imagery === "s2cloudless" ? "S2 mosaic 2024" :
     imagery === "gmaps" ? "Google satellite" :
@@ -1616,6 +1829,48 @@ export function MapCanvas({
         <span className="mx-1.5 text-subtle">·</span>
         {grain}
       </div>
+      <CloudChip />
+    </div>
+  );
+}
+
+function CloudChip() {
+  const [wx, setWx] = useState("cloud —");
+  useEffect(() => {
+    let timer = 0;
+    let last = "";
+    const pull = (lat: number, lon: number) => {
+      const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+      if (key === last) return;
+      last = key;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,cloud_cover,wind_speed_10m,precipitation`;
+      void fetch(url)
+        .then((r) => r.json())
+        .then((j: { current?: { temperature_2m?: number; cloud_cover?: number; wind_speed_10m?: number; precipitation?: number } }) => {
+          const c = j.current;
+          if (!c) return;
+          const cloud = c.cloud_cover ?? 0;
+          const note = cloud > 60 ? "S2 cloudy — try S1 for this date" : cloud > 30 ? "partial cloud" : "optical usable";
+          setWx(`${Math.round(c.temperature_2m ?? 0)}°C · cloud ${Math.round(cloud)}% · ${note}`);
+        })
+        .catch(() => setWx("cloud n/a"));
+    };
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ lat: number; lon: number }>).detail;
+      if (!d) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => pull(d.lat, d.lon), 900);
+    };
+    window.addEventListener("ahsr-cam", on);
+    pull(15.6, 32.5);
+    return () => {
+      window.removeEventListener("ahsr-cam", on);
+      window.clearTimeout(timer);
+    };
+  }, []);
+  return (
+    <div className="pointer-events-none absolute bottom-36 left-3 hidden max-w-[22rem] rounded-full border border-border bg-bg/80 px-2.5 py-1 font-mono text-[11px] text-muted md:block">
+      {wx}
     </div>
   );
 }

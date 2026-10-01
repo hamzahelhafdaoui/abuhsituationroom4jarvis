@@ -142,7 +142,16 @@ export function deadReckon(f: FlightEvent, dtSec: number): FlightEvent {
   };
 }
 
-/** Keep Sudan-visible archive tracks when live ADS-B is mostly outside the frame. */
+/** Dead-reckon a live AIS contact between polls. Lane markers are not passed here. */
+export function deadReckonVessel(v: VesselEvent, dtSec: number): VesselEvent {
+  if (!v.live || v.sog < 0.4 || dtSec <= 0) return v;
+  const km = v.sog * 1.852 * (dtSec / 3600);
+  const rad = ((v.cog ?? 0) * Math.PI) / 180;
+  const dLat = (km * Math.cos(rad)) / 111;
+  const cos = Math.cos((v.lat * Math.PI) / 180);
+  const dLon = (km * Math.sin(rad)) / (111 * Math.max(Math.abs(cos), 0.2));
+  return { ...v, lat: v.lat + dLat, lon: v.lon + dLon };
+}
 export function mergeFlights(live: FlightEvent[], archive: FlightEvent[] = FLIGHTS): FlightEvent[] {
   const seen = new Set(live.map((f) => f.hex));
   const extra = archive.filter((a) => !seen.has(a.hex));

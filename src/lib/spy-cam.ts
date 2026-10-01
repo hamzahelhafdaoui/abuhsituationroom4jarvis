@@ -49,7 +49,7 @@ type FlyMap = {
 
 export function cinematicFly(
   map: FlyMap,
-  opts: { lon: number; lat: number; zoom: number; label?: string },
+  opts: { lon: number; lat: number; zoom: number; label?: string; flat?: boolean },
 ) {
   let ran = false;
   const go = () => {
@@ -64,7 +64,7 @@ export function cinematicFly(
     const dist = Math.hypot(opts.lat - from.lat, opts.lon - from.lng);
     const duration = flyMs(map.getZoom(), opts.zoom, dist);
     const inward = opts.zoom > map.getZoom() + 0.2;
-    const bearing = map.getBearing() + (inward ? 22 + Math.min(24, dist * 6) : -10);
+    const bearing = opts.flat ? 0 : map.getBearing() + (inward ? 22 + Math.min(24, dist * 6) : -10);
     emitSlew({ phase: "slewing", label: opts.label, duration });
     const onEnd = () => {
       map.off("moveend", onEnd);
@@ -75,7 +75,7 @@ export function cinematicFly(
     const cam = {
       center: [opts.lon, opts.lat],
       zoom: opts.zoom,
-      pitch: pitchForZoom(opts.zoom),
+      pitch: opts.flat ? 0 : pitchForZoom(opts.zoom),
       bearing,
       duration,
       easing: spyEase,
