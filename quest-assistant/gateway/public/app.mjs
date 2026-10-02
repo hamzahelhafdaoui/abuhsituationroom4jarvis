@@ -1,11 +1,13 @@
 import { PLACES, cleanFlags, demoPlan, stagePlan } from "./protocol.mjs";
 const $ = id => document.getElementById(id);
+// Sudan is UTC+2. Keep all five synthetic fixtures inside the current Khartoum day.
+const demoNow = Date.now(), demoDayElapsed = (demoNow + 2 * 3600000) % 86400000;
 const synthetic = Array.from({ length: 5 }, (_, i) => ({
   id: "demo-" + (i + 1), title: ["Example aid access report", "Example source comparison",
     "Example thermal anomaly for review", "Example infrastructure note", "Example document follow-up"][i],
   body: "Synthetic demonstration record. This is not an actual incident or current report.",
   lat: 12.053 + i * 0.009, lon: 24.881 + i * 0.012,
-  date: new Date(Date.now() - i * 3600000).toISOString(),
+  date: new Date(demoNow - i * Math.min(3600000, demoDayElapsed / 5)).toISOString(),
   sourceLabel: "Synthetic demo fixture", confidence: "demonstration only", url: null,
 }));
 let state = {

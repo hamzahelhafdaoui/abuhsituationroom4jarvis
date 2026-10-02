@@ -3,6 +3,8 @@ const cors = { "access-control-allow-origin": "http://127.0.0.1:8080", "access-c
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
   test("Sudan workflow and readable HUD " + viewport.width, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
+    // 00:05 in Khartoum: exercise the demonstration right across the day boundary.
+    await page.clock.install({ time: new Date("2026-10-02T22:05:00Z") });
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.route("https://tile.openstreetmap.org/**", route => route.fulfill({
       contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCfcAAAAASUVORK5CYII=", "base64"),
