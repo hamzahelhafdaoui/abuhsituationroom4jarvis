@@ -79,7 +79,8 @@ export async function listVoices(env = process.env, fetcher = fetch, cursor = ""
   if (!response.ok) throw new Error("ElevenLabs voice list returned HTTP " + response.status + ".");
   const data = await response.json();
   if (!Array.isArray(data.voices)) throw new Error("Invalid voice list returned by ElevenLabs.");
-  const voices = data.voices.slice(0, 100).filter(row => validVoiceId(row?.voice_id) && typeof row.name === "string")
+  // ElevenLabs may include extra default voices on the first page.
+  const voices = data.voices.slice(0, 500).filter(row => validVoiceId(row?.voice_id) && typeof row.name === "string")
     .map(row => ({
       id: row.voice_id, name: row.name.slice(0, 100),
       description: [row.labels?.accent, row.labels?.gender, row.labels?.descriptive]

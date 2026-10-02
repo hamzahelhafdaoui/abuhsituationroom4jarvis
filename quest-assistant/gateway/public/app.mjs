@@ -226,6 +226,8 @@ async function speak(text, turn, previewConnection = null) {
   }
 }
 function stop() {
+  if (voiceListAbort) $("voice-status").textContent = "Voice loading stopped.";
+  cancelVoiceList();
   revision++; requestAbort?.abort(); requestAbort = null; busy = false; $("send").disabled = false;
   cancelRecording = true;
   if (recorder && recorder.state !== "inactive") recorder.stop();
@@ -360,7 +362,10 @@ for (const id of ["backend-url", "access-token"]) $(id).oninput = () => {
   $("load-voices").textContent = "Load my voices";
   $("voice-status").textContent = "Connection changed. Load this backend's voices before choosing.";
 };
-$("settings").addEventListener("close", () => { cancelVoiceList(); stopAudio(); });
+$("settings").addEventListener("close", () => {
+  cancelVoiceList(); const playing = Boolean(voiceAbort || audio); stopAudio();
+  if (playing && !busy) activity("Ready");
+});
 $("settings-button").onclick = () => {
   $("backend-url").value = config.backend; $("access-token").value = config.token; $("room-url").value = config.room;
   voiceChoices = []; voiceCursor = ""; renderVoiceChoices(config.voiceId);
