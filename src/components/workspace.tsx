@@ -914,7 +914,7 @@ export function Workspace() {
     <div className="relative h-dvh overflow-hidden bg-bg text-fg" data-look={look}>
       <SituationRoomBridge flags={[
         ...alertsToFlags(alerts), ...reportsToFlags(allReports),
-        ...reportsToFlags(live?.reports ?? []), ...detectToFlags(detectReport?.hits ?? []),
+        ...detectToFlags(detectReport?.hits ?? []),
       ]} />
       <MapCanvas
         boxes={boxes}

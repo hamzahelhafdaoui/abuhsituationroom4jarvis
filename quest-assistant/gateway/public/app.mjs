@@ -205,7 +205,7 @@ async function speak(text, turn) {
       if (turn !== revision) return;
       audioUrl = URL.createObjectURL(blob); audio = new Audio(audioUrl);
       audio.onended = () => { stopAudio(); activity("Ready"); };
-      await audio.play(); activity("Speaking · AI voice");
+      await audio.play(); activity("Speaking · " + (status.voiceProvider === "elevenlabs" ? "ElevenLabs" : "AI voice"));
     } else if (nativeRequest({ type: "speak", text: text.slice(0, 4000) })) activity("Speaking · device voice");
     else if (window.speechSynthesis) {
       const voices = speechSynthesis.getVoices(), voice = voices.find(v => v.lang === "en-GB") || voices.find(v => v.lang.startsWith("en"));
@@ -225,7 +225,7 @@ function stop() {
 $("mic").onclick = async () => {
   if (recorder?.state === "recording") { recorder.stop(); return; }
   if (busy) return;
-  if (!status.transcription) { showError(new Error("Microphone transcription needs an OpenAI API key on your backend. Typed commands work with every provider.")); return; }
+  if (!status.transcription) { showError(new Error("Microphone transcription needs an ElevenLabs or OpenAI API key on your backend. Typed commands work with every provider.")); return; }
   const turn = ++revision; cancelRecording = false;
   try {
     stopAudio();

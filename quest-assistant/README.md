@@ -1,6 +1,6 @@
 # Quest Assistant prototype
 
-A personal HUD with one voice and interchangeable OpenAI, xAI and Google model adapters.
+A personal HUD with an ElevenLabs voice and interchangeable OpenAI, xAI and Google model adapters.
 The Android APK is a **2D Quest panel app**, not a native OpenXR/passthrough experience.
 It includes a bundled HUD and synthetic demonstration records. It does not need a backend for
 demo commands. Live AI, cloud speech and your situation-room connection require configuration.
@@ -34,7 +34,13 @@ a repository `.env` file:
 | Variable | Purpose |
 | --- | --- |
 | ASSISTANT_TOKEN | Required private access token, random and at least 24 characters |
-| OPENAI_API_KEY | OpenAI conversation, transcription and cloud speech |
+| ELEVENLABS_API_KEY | ElevenLabs speech and microphone transcription |
+| ELEVENLABS_VOICE_ID | Your chosen ElevenLabs voice ID |
+| ELEVENLABS_TTS_MODEL | Optional; default eleven_multilingual_v2 |
+| ELEVENLABS_STT_MODEL | Optional; default scribe_v1 |
+| VOICE_PROVIDER | Optional; elevenlabs or openai; ElevenLabs is preferred when its key exists |
+| TRANSCRIPTION_PROVIDER | Optional; elevenlabs or openai; ElevenLabs is preferred when its key exists |
+| OPENAI_API_KEY | OpenAI conversation and optional transcription/speech fallback |
 | XAI_API_KEY | Grok conversation |
 | GEMINI_API_KEY | Gemini conversation |
 | OPENAI_MODEL | Optional; default gpt-4.1-mini |
@@ -57,10 +63,12 @@ need their hosting provider's shared rate controls for a global cap; the in-memo
 not shared across instances.
 
 Only explicit commands initiate paid calls. No provider fallback runs silently.
-Cloud microphone transcription currently uses OpenAI even when Grok or Gemini is selected.
-Device/browser speech is available only when the device has a compatible speech engine.
-Spoken replies disclose AI-generated speech and use an original assistant delivery.
-No actor clone or exact film voice is included. Stop cancels pending requests and audio;
+ElevenLabs can handle both microphone transcription and spoken replies independently of the
+selected reasoning model. Your chosen voice requires its voice ID and an API key with the
+relevant permissions and available quota. An account subscription alone is not an API credential.
+OpenAI speech is optional. Device/browser speech is available only when a compatible speech
+engine is installed. The UI discloses AI-generated speech. No voice is bundled or cloned;
+ElevenLabs supplies the voice selected in your account. Stop cancels pending requests and audio;
 map actions already applied remain in place.
 
 Open **Connect** in the HUD, enter the HTTPS backend URL and ASSISTANT_TOKEN, then pick a

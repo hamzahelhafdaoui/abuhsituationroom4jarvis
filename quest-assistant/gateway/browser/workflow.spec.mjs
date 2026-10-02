@@ -8,7 +8,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCfcAAAAASUVORK5CYII=", "base64"),
     }));
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Sudan overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sudan", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Nyala", exact: true }).click();
     await expect(page.locator("#location")).toHaveText("Nyala");
     await page.getByRole("button", { name: "Read five", exact: true }).first().click();

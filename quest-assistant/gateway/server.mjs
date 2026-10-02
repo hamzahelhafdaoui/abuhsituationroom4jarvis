@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { chat, providerStatus } from "./providers.mjs";
+import { speechRequest, transcriptionRequest, voiceStatus } from "./voice.mjs";
 const PUBLIC = fileURLToPath(new URL("./public/", import.meta.url));
 const STATIC = new Set(["/index.html", "/app.mjs", "/style.css", "/protocol.mjs",
   "/vendor/leaflet.js", "/vendor/leaflet.css", "/vendor/leaflet-LICENSE.txt"]);
@@ -56,8 +57,7 @@ export function createHandler(env = process.env, fetcher = fetch) {
       if (!authorized(req.headers.authorization, env.ASSISTANT_TOKEN))
         return json(res, 401, { error: "Configure the backend access token to connect." });
       if (path === "/api/status" && req.method === "GET") return json(res, 200, {
-        providers: providerStatus(env), voice: Boolean(env.OPENAI_API_KEY),
-        transcription: Boolean(env.OPENAI_API_KEY),
+        providers: providerStatus(env), ...voiceStatus(env),
       });
       if (req.method !== "POST") return json(res, 405, { error: "Method not allowed." });
       if (!["/api/chat", "/api/transcribe", "/api/speech"].includes(path))
@@ -71,36 +71,18 @@ export function createHandler(env = process.env, fetcher = fetch) {
         const input = JSON.parse((await readBody(req, 64000)).toString("utf8"));
         return json(res, 200, await chat(input, env, fetcher));
       }
-      if (!env.OPENAI_API_KEY) return json(res, 503, { error: "Cloud voice requires an OpenAI API key on the backend. Typed commands still work." });
-      let upstream;
+      let request;
       if (path === "/api/transcribe") {
         const mime = String(req.headers["content-type"] || "").split(";")[0];
-        const extensions = { "audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg", "audio/wav": "wav" };
-        if (!extensions[mime]) return json(res, 415, { error: "Unsupported audio format." });
-        const audio = await readBody(req, 8 * 1024 * 1024);
-        if (!audio.length) return json(res, 400, { error: "Empty audio recording." });
-        const form = new FormData();
-        form.append("model", env.OPENAI_STT_MODEL || "gpt-4o-mini-transcribe");
-        form.append("file", new Blob([audio], { type: mime }), "recording." + extensions[mime]);
-        upstream = await fetcher("https://api.openai.com/v1/audio/transcriptions", {
-          method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form,
-          signal: AbortSignal.timeout(45000),
-        });
+        request = transcriptionRequest(await readBody(req, 8 * 1024 * 1024), mime, env);
       } else {
         const input = JSON.parse((await readBody(req, 20000)).toString("utf8"));
-        if (typeof input.text !== "string" || !input.text.trim() || input.text.length > 4000)
-          return json(res, 400, { error: "Speech text must be between 1 and 4,000 characters." });
-        upstream = await fetcher("https://api.openai.com/v1/audio/speech", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.OPENAI_API_KEY },
-          body: JSON.stringify({
-            model: env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts", voice: env.OPENAI_TTS_VOICE || "cedar",
-            input: input.text, response_format: "mp3",
-            instructions: "Original British assistant voice. Calm, precise, warm, understated dry wit. Brief pauses. Do not imitate any named actor.",
-          }),
-          signal: AbortSignal.timeout(45000),
-        });
+        request = speechRequest(input.text, env);
       }
+      const upstream = await fetcher(request.url, {
+        method: "POST", headers: request.headers, body: request.body,
+        signal: AbortSignal.timeout(45000),
+      });
       if (!upstream.ok) return json(res, 502, { error: "Voice provider returned HTTP " + upstream.status + "." });
       if (path === "/api/transcribe") {
         const body = await upstream.json();
@@ -112,7 +94,7 @@ export function createHandler(env = process.env, fetcher = fetch) {
       res.end(bytes);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Assistant request failed.";
-      const safe = /too large|prompt|Unknown|not configured|returned HTTP|invalid|Invalid|Unsupported|Unknown|Workspace|numbered|layer|location|usable|plan/.test(message)
+      const safe = /too large|prompt|Unknown|not configured|returned HTTP|invalid|Invalid|Unsupported|Unknown|Workspace|numbered|layer|location|usable|plan|Speech text|Empty audio/.test(message)
         ? message : "Request failed. Check the backend connection and provider settings.";
       json(res, message.includes("too large") ? 413 : 400, { error: safe });
     }
