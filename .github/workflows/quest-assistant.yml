@@ -1,0 +1,87 @@
+name: Quest Assistant APK
+on:
+  push:
+    branches: ['codex/quest-assistant-prototype']
+    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', 'src/routes/api/assistant/**', '.github/workflows/quest-assistant.yml']
+  pull_request:
+    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', '.github/workflows/quest-assistant.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  companion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install companion dependencies
+        working-directory: quest-assistant/gateway
+        run: npm install --no-audit --no-fund
+      - name: Validate gateway and tool protocol
+        working-directory: quest-assistant/gateway
+        run: npm test
+      - name: Bundle trusted local assets
+        working-directory: quest-assistant/gateway
+        run: npm run build
+      - name: Install browser for HUD checks
+        working-directory: quest-assistant/gateway
+        run: npx playwright install --with-deps chromium
+      - name: Exercise desktop and mobile HUD
+        working-directory: quest-assistant/gateway
+        run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quest-hud-checks
+          path: quest-assistant/gateway/test-results
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Copy HUD into APK
+        run: |
+          mkdir -p quest-assistant/android/app/src/main/assets
+          cp -R quest-assistant/gateway/public/. quest-assistant/android/app/src/main/assets/
+      - name: Build debug APK
+        working-directory: quest-assistant/android
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quest-assistant-debug-apk
+          path: quest-assistant/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+  situation-room:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run typecheck
+      - name: Install browser for situation-room render check
+        run: npx playwright install --with-deps chromium
+      - name: Check situation-room production UI
+        run: |
+          sudo mkdir -p /workspace/screenshots
+          sudo chown "$USER" /workspace/screenshots
+          npm run preview:restart
+          node scripts/browser-smoke.mjs http://127.0.0.1:8081/ /workspace/screenshots/situation-room.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: situation-room-render-checks
+          path: /workspace/screenshots

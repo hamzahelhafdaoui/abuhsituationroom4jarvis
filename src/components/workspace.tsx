@@ -13,7 +13,8 @@ import { fuseDetect, runDetect, type DetectHit, type DetectReport } from "@/lib/
 import { laneVessels, mergeFlights } from "@/lib/traffic";
 import { getTheaterMarkets, type MarketQuote } from "@/lib/markets";
 import { scanFuae, seedFuae, type FuaeRecord } from "@/lib/fuae";
-import type { Flag } from "@/lib/flags";
+import { alertsToFlags, detectToFlags, reportsToFlags, type Flag } from "@/lib/flags";
+import { SituationRoomBridge } from "@/components/quest-assistant-bridge";
 import { SEED_REPORTS } from "@/lib/osint";
 import { GDELT_ARCHIVE, OSM_SEED, FEED_SEED } from "@/lib/warroom-data";
 import { THEATER_BY_ID, THEATERS } from "@/lib/theaters";
@@ -911,6 +912,10 @@ export function Workspace() {
 
   return (
     <div className="relative h-dvh overflow-hidden bg-bg text-fg" data-look={look}>
+      <SituationRoomBridge flags={[
+        ...alertsToFlags(alerts), ...reportsToFlags(allReports),
+        ...detectToFlags(detectReport?.hits ?? []),
+      ]} />
       <MapCanvas
         boxes={boxes}
         firms={firms}
