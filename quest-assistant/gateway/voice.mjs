@@ -1,22 +1,27 @@
-export function voiceStatus(env = process.env) {
+export function voiceStatus(env = process.env, voiceId = "") {
   const voiceProvider = env.VOICE_PROVIDER || (env.ELEVENLABS_API_KEY ? "elevenlabs" : "openai");
   const transcriptionProvider = env.TRANSCRIPTION_PROVIDER || (env.ELEVENLABS_API_KEY ? "elevenlabs" : "openai");
   return {
     voiceProvider,
-    voice: voiceProvider === "elevenlabs" ? Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID)
+    voiceSelection: voiceProvider === "elevenlabs" && Boolean(env.ELEVENLABS_API_KEY),
+    voice: voiceProvider === "elevenlabs" ? Boolean(env.ELEVENLABS_API_KEY && (voiceId || env.ELEVENLABS_VOICE_ID))
       : voiceProvider === "openai" && Boolean(env.OPENAI_API_KEY),
     transcriptionProvider,
     transcription: transcriptionProvider === "elevenlabs" ? Boolean(env.ELEVENLABS_API_KEY)
       : transcriptionProvider === "openai" && Boolean(env.OPENAI_API_KEY),
   };
 }
-export function speechRequest(text, env = process.env) {
+export function speechRequest(text, env = process.env, voiceId = "") {
   if (typeof text !== "string" || !text.trim() || text.length > 4000)
     throw new Error("Speech text must contain between 1 and 4,000 characters.");
-  const status = voiceStatus(env);
+  if (typeof voiceId !== "string" || (voiceId && !validVoiceId(voiceId)))
+    throw new Error("Invalid ElevenLabs voice ID.");
+  const status = voiceStatus(env, voiceId);
+  if (voiceId && status.voiceProvider !== "elevenlabs")
+    throw new Error("Voice selection is only available for ElevenLabs.");
   if (!status.voice) throw new Error("Cloud voice is not configured. Set the ElevenLabs key and voice ID on the backend.");
   if (status.voiceProvider === "elevenlabs") return {
-    url: "https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(env.ELEVENLABS_VOICE_ID) + "?output_format=mp3_44100_128",
+    url: "https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voiceId || env.ELEVENLABS_VOICE_ID) + "?output_format=mp3_44100_128",
     headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY },
     body: JSON.stringify({
       text, model_id: env.ELEVENLABS_TTS_MODEL || "eleven_multilingual_v2",
@@ -54,4 +59,33 @@ export function transcriptionRequest(audio, mime, env = process.env) {
     url: "https://api.openai.com/v1/audio/transcriptions",
     headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form,
   };
+}
+
+// Return only the voice information needed by the chooser; account details and keys stay server-side.
+export function validVoiceId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+export async function listVoices(env = process.env, fetcher = fetch, cursor = "") {
+  if (!voiceStatus(env).voiceSelection) throw new Error("ElevenLabs voice selection is not configured on the backend.");
+  if (typeof cursor !== "string" || cursor.length > 1024 || /[\u0000-\u001f]/.test(cursor))
+    throw new Error("Invalid voice-list cursor.");
+  const url = new URL("https://api.elevenlabs.io/v2/voices");
+  url.searchParams.set("page_size", "100");
+  if (cursor) url.searchParams.set("next_page_token", cursor);
+  const response = await fetcher(url.href, {
+    headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, redirect: "error",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error("ElevenLabs voice list returned HTTP " + response.status + ".");
+  const data = await response.json();
+  if (!Array.isArray(data.voices)) throw new Error("Invalid voice list returned by ElevenLabs.");
+  const voices = data.voices.slice(0, 100).filter(row => validVoiceId(row?.voice_id) && typeof row.name === "string")
+    .map(row => ({
+      id: row.voice_id, name: row.name.slice(0, 100),
+      description: [row.labels?.accent, row.labels?.gender, row.labels?.descriptive]
+        .filter(value => typeof value === "string").map(value => value.slice(0, 60)).join(" · "),
+    }));
+  const nextCursor = data.has_more && typeof data.next_page_token === "string" && data.next_page_token.length <= 1024
+    ? data.next_page_token : "";
+  return { voices, nextCursor, defaultVoiceId: validVoiceId(env.ELEVENLABS_VOICE_ID) ? env.ELEVENLABS_VOICE_ID : "" };
 }

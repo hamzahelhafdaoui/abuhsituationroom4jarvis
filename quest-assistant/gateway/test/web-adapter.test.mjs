@@ -24,3 +24,35 @@ test("embedded chat returns the same validated provider plan as the standalone b
   }));
   assert.equal(res.status, 200); assert.equal((await res.json()).actions[0].place, "nyala");
 });
+
+test("voice catalog stays behind the access token and selected voice reaches ElevenLabs speech", async () => {
+  const calls = [];
+  const handle = createWebHandler({ ASSISTANT_TOKEN: token, ELEVENLABS_API_KEY: "private-test-key" }, async (url, options) => {
+    calls.push({ url, options });
+    if (url.includes("/v2/voices")) return new Response(JSON.stringify({
+      voices: [{ voice_id: "chosen123", name: "Assistant", labels: {} }], has_more: false,
+    }));
+    return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "audio/mpeg" } });
+  });
+  const denied = await handle(new Request("https://room.example/api/assistant/api/voices"));
+  assert.equal(denied.status, 401); assert.equal(calls.length, 0);
+  const listed = await handle(new Request("https://room.example/api/assistant/api/voices", {
+    headers: { Authorization: "Bearer " + token },
+  }));
+  assert.equal(listed.status, 200);
+  const body = await listed.json();
+  assert.equal(body.voices[0].id, "chosen123");
+  assert.ok(!JSON.stringify(body).includes("private-test-key"));
+  const spoken = await handle(new Request("https://room.example/api/assistant/api/speech", {
+    method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ text: "Nyala ready", voiceId: "chosen123" }),
+  }));
+  assert.equal(spoken.status, 200);
+  assert.match(calls[1].url, /text-to-speech\/chosen123/);
+  assert.equal(calls[1].options.headers["xi-api-key"], "private-test-key");
+  const bad = await handle(new Request("https://room.example/api/assistant/api/speech", {
+    method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ text: "Ready", voiceId: "../bad" }),
+  }));
+  assert.equal(bad.status, 400); assert.equal(calls.length, 2);
+});

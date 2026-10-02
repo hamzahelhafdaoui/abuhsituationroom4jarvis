@@ -40,7 +40,7 @@ details{border-top:1px solid var(--border);padding-top:16px;margin-top:20px}summ
 #command-form{display:flex;gap:8px}#command{flex:1;width:0}#mic[aria-pressed=true]{background:var(--accent);color:var(--bg)}
 .workbench{padding:24px;min-height:440px}.workbench label{display:block;margin:16px 0 8px}.workbench button{margin-top:12px}
 dialog{background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius);width:min(560px,calc(100% - 32px));padding:24px}
-dialog::backdrop{background:rgba(0,0,0,.65)}dialog label{display:block;margin:16px 0 8px}dialog input{width:100%}.dialog-actions{justify-content:flex-end;margin-top:24px}
+dialog::backdrop{background:rgba(0,0,0,.65)}dialog label{display:block;margin:16px 0 8px}dialog input,dialog select{width:100%}dialog{max-height:calc(100dvh - 32px);overflow:auto}.voice-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.dialog-actions{justify-content:flex-end;margin-top:24px}
 .disclosure{margin-bottom:0}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 [hidden]{display:none!important}.leaflet-container{font-family:var(--font)}.leaflet-control-attribution{font-size:10px!important}
 @media(max-width:1000px){main{grid-template-columns:minmax(0,1fr)}.intel-panel{max-height:440px;overflow:auto}#map-wrap{height:360px}}

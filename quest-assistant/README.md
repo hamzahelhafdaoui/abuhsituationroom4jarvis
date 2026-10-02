@@ -40,7 +40,7 @@ a repository `.env` file:
 | --- | --- |
 | ASSISTANT_TOKEN | Required private access token, random and at least 24 characters |
 | ELEVENLABS_API_KEY | ElevenLabs speech and microphone transcription |
-| ELEVENLABS_VOICE_ID | Your chosen ElevenLabs voice ID |
+| ELEVENLABS_VOICE_ID | Optional default voice; you can choose one in the HUD instead |
 | ELEVENLABS_TTS_MODEL | Optional; default eleven_multilingual_v2 |
 | ELEVENLABS_STT_MODEL | Optional; default scribe_v1 |
 | VOICE_PROVIDER | Optional; elevenlabs or openai; ElevenLabs is preferred when its key exists |
@@ -61,7 +61,7 @@ Model availability depends on the provider account. Defaults are configurable, a
 provider calls have been validated without credentials. Consumer chat subscriptions and
 API billing are separate.
 
-The backend exposes authenticated `/api/status`, `/api/chat`, `/api/transcribe` and
+The backend exposes authenticated `/api/status`, `/api/voices`, `/api/chat`, `/api/transcribe` and
 `/api/speech`. All provider keys remain on the server. Requests have size, output and timeout
 limits and a 12-request-per-minute cap per running backend instance. Serverless deployments
 need their hosting provider's shared rate controls for a global cap; the in-memory cap is
@@ -69,7 +69,7 @@ not shared across instances.
 
 Only explicit commands initiate paid calls. No provider fallback runs silently.
 ElevenLabs can handle both microphone transcription and spoken replies independently of the
-selected reasoning model. Your chosen voice requires its voice ID and an API key with the
+selected reasoning model. Your chosen voice requires an API key with the
 relevant permissions and available quota. An account subscription alone is not an API credential.
 OpenAI speech is optional. Device/browser speech is available only when a compatible speech
 engine is installed. The UI discloses AI-generated speech. No voice is bundled or cloned;
@@ -77,7 +77,7 @@ ElevenLabs supplies the voice selected in your account. Stop cancels pending req
 map actions already applied remain in place.
 
 Open **Connect** in the HUD, enter the HTTPS backend URL and ASSISTANT_TOKEN, then pick a
-provider. This token is not a provider API key. Browser configuration lasts for the browser
+provider. This token is not a provider API key. Select **Load my voices** to browse the voices\nin your ElevenLabs account, choose one, and use **Test voice** for a short spoken preview.\nVoice loading and previews happen only when you press their buttons; previews use your API quota.\nSave the connection to retain your chosen voice. You can also keep the backend default set with\nELEVENLABS_VOICE_ID. The key needs voice-list and text-to-speech access. Browser configuration lasts for the browser
 session; the Android app stores connection settings in app-private preferences with backups
 disabled.
 

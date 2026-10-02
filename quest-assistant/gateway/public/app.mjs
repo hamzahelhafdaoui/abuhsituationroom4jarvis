@@ -12,12 +12,13 @@ let state = {
   sourceMode: "demo", flags: synthetic, numbered: [], selected: null, diagram: [],
   timeZone: "Africa/Khartoum", layers: { firms: false, thermalRaster: false }, camera: { ...PLACES.sudan },
 };
-let config = { backend: "", token: "", room: "" };
+let config = { backend: "", token: "", room: "", voiceId: "" };
 try { config = { ...config, ...JSON.parse(sessionStorage.getItem("quest-connection") || "{}") }; } catch {}
 let connected = false, busy = false, revision = 0;
 let requestAbort = null, voiceAbort = null, audio = null, audioUrl = null;
 let recorder = null, recordingStream = null, recordTimer = null, cancelRecording = false;
 let status = { providers: [], voice: false, transcription: false };
+let voiceChoices = [], voiceCursor = "", voiceListAbort = null, voiceListRevision = 0;
 const history = [], pending = new Map();
 let map = null, flagMarkers = null, thermalMarkers = null, thermalArea = null;
 if (window.L) {
@@ -97,10 +98,10 @@ function cleanBackend(value) {
     throw new Error("Use an HTTPS backend URL without credentials, query strings or fragments.");
   return url.href.replace(/\/$/, "");
 }
-async function api(path, options = {}) {
-  if (!config.backend || !config.token) throw new Error("Connect an assistant backend and its access token first.");
-  const response = await fetch(config.backend + path, {
-    ...options, headers: { Authorization: "Bearer " + config.token, ...options.headers },
+async function api(path, options = {}, connection = config) {
+  if (!connection.backend || !connection.token) throw new Error("Connect an assistant backend and its access token first.");
+  const response = await fetch(connection.backend + path, {
+    ...options, headers: { Authorization: "Bearer " + connection.token, ...options.headers },
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -192,20 +193,24 @@ function stopAudio() {
   if (audioUrl) { URL.revokeObjectURL(audioUrl); audioUrl = null; }
   window.speechSynthesis?.cancel(); nativeRequest({ type: "stop" });
 }
-async function speak(text, turn) {
+async function speak(text, turn, previewConnection = null) {
   stopAudio();
+  const connection = previewConnection || config;
+  const voiceId = previewConnection ? connection.voiceId : status.voiceProvider === "elevenlabs" ? config.voiceId : "";
   try {
-    if (status.voice && config.backend) {
+    if (connection.backend && (previewConnection || status.voice || (status.voiceSelection && voiceId))) {
       voiceAbort = new AbortController(); activity("Generating voice");
       const res = await api("/api/speech", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.slice(0, 4000) }), signal: voiceAbort.signal,
-      });
+        body: JSON.stringify({ text: text.slice(0, 4000), voiceId }), signal: voiceAbort.signal,
+      }, connection);
       const blob = await res.blob();
       if (turn !== revision) return;
       audioUrl = URL.createObjectURL(blob); audio = new Audio(audioUrl);
       audio.onended = () => { stopAudio(); activity("Ready"); };
-      await audio.play(); activity("Speaking · " + (status.voiceProvider === "elevenlabs" ? "ElevenLabs" : "AI voice"));
+      await audio.play();
+      if (previewConnection) $("voice-status").textContent = "Preview playing. Save the connection to keep this voice.";
+      activity("Speaking · " + (status.voiceProvider === "elevenlabs" ? "ElevenLabs" : "AI voice"));
     } else if (nativeRequest({ type: "speak", text: text.slice(0, 4000) })) activity("Speaking · device voice");
     else if (window.speechSynthesis) {
       const voices = speechSynthesis.getVoices(), voice = voices.find(v => v.lang === "en-GB") || voices.find(v => v.lang.startsWith("en"));
@@ -213,7 +218,12 @@ async function speak(text, turn) {
       const speech = new SpeechSynthesisUtterance(text); speech.voice = voice; speech.rate = 0.95;
       speech.onend = () => activity("Ready"); speechSynthesis.speak(speech); activity("Speaking · device voice");
     } else throw new Error("No voice engine is available. Connect cloud voice to hear replies.");
-  } catch (err) { if (turn === revision && err.name !== "AbortError") showError(err); }
+  } catch (err) {
+    if (turn === revision && err.name !== "AbortError") {
+      if (previewConnection) { $("voice-status").textContent = err.message; activity("Needs attention"); }
+      else showError(err);
+    }
+  }
 }
 function stop() {
   revision++; requestAbort?.abort(); requestAbort = null; busy = false; $("send").disabled = false;
@@ -285,8 +295,77 @@ $("export-diagram").onclick = () => {
   const blob = new Blob([$("diagram").value], { type: "text/plain" }), url = URL.createObjectURL(blob), a = document.createElement("a");
   a.href = url; a.download = "evidence-diagram.mmd"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
+function connectionDraft() {
+  const backend = cleanBackend($("backend-url").value);
+  const token = $("access-token").value;
+  if (!backend || token.length < 24) throw new Error("Enter the HTTPS backend URL and its access token first.");
+  return { backend, token, voiceId: $("elevenlabs-voice").value };
+}
+function renderVoiceChoices(selected = "") {
+  const select = $("elevenlabs-voice");
+  select.replaceChildren(new Option("Backend default voice", ""));
+  if (selected && !voiceChoices.some(row => row.id === selected))
+    select.add(new Option("Saved voice · " + selected, selected));
+  for (const row of voiceChoices) select.add(new Option(row.name + (row.description ? " · " + row.description : ""), row.id));
+  select.value = selected;
+}
+function cancelVoiceList() {
+  voiceListRevision++; voiceListAbort?.abort(); voiceListAbort = null;
+  $("load-voices").disabled = false;
+}
+$("load-voices").onclick = async () => {
+  cancelVoiceList();
+  const ticket = voiceListRevision;
+  const controller = new AbortController(); voiceListAbort = controller;
+  const signal = controller.signal;
+  const timer = setTimeout(() => controller.abort(), 20000);
+  $("load-voices").disabled = true;
+  $("voice-status").textContent = "Loading your ElevenLabs voices…";
+  try {
+    const draft = connectionDraft();
+    const res = await api("/api/voices" + (voiceCursor ? "?cursor=" + encodeURIComponent(voiceCursor) : ""), { signal }, draft);
+    const data = await res.json();
+    if (ticket !== voiceListRevision) return;
+    if (!Array.isArray(data.voices)) throw new Error("The backend returned an invalid voice list.");
+    const selected = $("elevenlabs-voice").value;
+    const choices = new Map((voiceCursor ? voiceChoices : []).map(row => [row.id, row]));
+    for (const row of data.voices) {
+      if (typeof row.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(row.id) && typeof row.name === "string")
+        choices.set(row.id, { id: row.id, name: row.name.slice(0, 100), description: String(row.description || "").slice(0, 200) });
+    }
+    voiceChoices = [...choices.values()].slice(0, 1000);
+    voiceCursor = typeof data.nextCursor === "string" ? data.nextCursor : "";
+    renderVoiceChoices(selected);
+    $("load-voices").textContent = voiceCursor ? "Load more voices" : "Refresh my voices";
+    $("voice-status").textContent = voiceChoices.length
+      ? "Choose a voice, then Test voice. Each test generates a short sample using your API quota."
+      : "No voices were returned. Add a voice in your ElevenLabs account, then refresh.";
+  } catch (err) {
+    if (ticket === voiceListRevision) $("voice-status").textContent = err.name === "AbortError" ? "Voice list timed out. Try loading again." : err.message;
+  } finally {
+    clearTimeout(timer);
+    if (ticket === voiceListRevision) { voiceListAbort = null; $("load-voices").disabled = false; }
+  }
+};
+$("preview-voice").onclick = async () => {
+  try {
+    const draft = connectionDraft();
+    stop(); $("voice-status").textContent = "Generating a short voice preview…";
+    await speak("Situation room ready. We can open Sudan, focus on Nyala, and review your latest records.", revision, draft);
+  } catch (err) { $("voice-status").textContent = err.message; }
+};
+$("elevenlabs-voice").onchange = stopAudio;
+for (const id of ["backend-url", "access-token"]) $(id).oninput = () => {
+  cancelVoiceList(); stopAudio(); voiceChoices = []; voiceCursor = ""; renderVoiceChoices();
+  $("load-voices").textContent = "Load my voices";
+  $("voice-status").textContent = "Connection changed. Load this backend's voices before choosing.";
+};
+$("settings").addEventListener("close", () => { cancelVoiceList(); stopAudio(); });
 $("settings-button").onclick = () => {
   $("backend-url").value = config.backend; $("access-token").value = config.token; $("room-url").value = config.room;
+  voiceChoices = []; voiceCursor = ""; renderVoiceChoices(config.voiceId);
+  $("load-voices").textContent = "Load my voices";
+  $("voice-status").textContent = "Load voices from your ElevenLabs account, or keep the backend default. Test voice generates a short sample using your API quota.";
   $("settings").showModal();
 };
 $("close-settings").onclick = () => $("settings").close();
@@ -296,7 +375,9 @@ async function refreshStatus() {
   try {
     status = await (await api("/api/status")).json();
     const configured = status.providers.filter(p => p.configured);
-    $("connection").textContent = configured.length ? configured.map(p => p.id).join(" / ") + " available" : "Backend connected · provider keys missing";
+    const modelStatus = configured.length ? configured.map(p => p.id).join(" / ") + " available" : "Backend connected · provider keys missing";
+    const voiceReady = status.voice || (status.voiceSelection && config.voiceId);
+    $("connection").textContent = modelStatus + " · " + (voiceReady ? (status.voiceProvider === "elevenlabs" ? "ElevenLabs voice ready" : "Cloud voice ready") : status.voiceSelection ? "Choose an ElevenLabs voice in Connect" : "Cloud voice unavailable");
   } catch (err) { $("connection").textContent = "Backend connection failed"; showError(err); }
 }
 $("settings-form").onsubmit = async event => {
@@ -306,7 +387,7 @@ $("settings-form").onsubmit = async event => {
     const room = roomValue ? new URL(roomValue) : null;
     if (room && (room.protocol !== "https:" || room.username || room.password)) throw new Error("Use an HTTPS situation-room URL without embedded credentials.");
     if (backend && $("access-token").value.length < 24) throw new Error("The backend token must contain at least 24 characters.");
-    stop(); config = { backend, token: $("access-token").value, room: room?.href || "" };
+    stop(); config = { backend, token: $("access-token").value, room: room?.href || "", voiceId: $("elevenlabs-voice").value };
     sessionStorage.setItem("quest-connection", JSON.stringify(config));
     nativeRequest({ type: "save_config", ...config });
     $("settings").close(); connected = false; state.sourceMode = "demo"; state.flags = synthetic;
@@ -332,7 +413,7 @@ if (window.QuestNative) {
     try {
       const data = JSON.parse(event.data);
       if (data.type === "config") {
-        config = { backend: data.backend || "", token: data.token || "", room: data.room || "" };
+        config = { backend: data.backend || "", token: data.token || "", room: data.room || "", voiceId: data.voiceId || "" };
         if (config.room) { $("room").hidden = false; $("map").hidden = true; $("room").src = config.room; }
         void refreshStatus();
       } else if (data.error) showError(new Error(data.error));

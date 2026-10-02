@@ -47,6 +47,10 @@
 <label for="backend-url">Assistant backend URL</label><input id="backend-url" type="url" placeholder="https://your-assistant.example">
 <label for="access-token">Backend access token</label><input id="access-token" type="password" autocomplete="off" placeholder="Your backend token">
 <label for="room-url">Situation room URL</label><input id="room-url" type="url" placeholder="https://your-situation-room.example">
+<label for="elevenlabs-voice">ElevenLabs reply voice</label>
+<select id="elevenlabs-voice"><option value="">Backend default voice</option></select>
+<div class="voice-actions"><button type="button" id="load-voices" class="quiet">Load my voices</button><button type="button" id="preview-voice" class="quiet">Test voice</button></div>
+<p id="voice-status" class="subtle" role="status">Load your voices using the ElevenLabs API key on your backend. Test voice generates a short sample using your API quota.</p>
 <p class="subtle">The situation room must include the companion bridge and allow this app’s exact origin. Configuration is kept for this browser session.</p>
 <div class="dialog-actions"><button type="button" id="close-settings" class="quiet">Cancel</button><button type="submit">Save connection</button></div>
 </form></dialog>

@@ -95,7 +95,11 @@ public class MainActivity extends Activity {
                                 if (!validUrl(backend) || !validUrl(room)) {
                                     sendError("Use HTTPS addresses for the backend and situation room."); break;
                                 }
-                                config.edit().putString("backend", backend).putString("room", room)
+                                String voiceId = data.optString("voiceId");
+                                if (!voiceId.isEmpty() && !voiceId.matches("[A-Za-z0-9_-]{1,128}")) {
+                                    sendError("Invalid ElevenLabs voice ID."); break;
+                                }
+                                config.edit().putString("voiceId", voiceId).putString("backend", backend).putString("room", room)
                                     .putString("token", data.optString("token")).apply();
                                 break;
                             case "stop": if (tts != null) tts.stop(); break;
@@ -134,7 +138,8 @@ public class MainActivity extends Activity {
             JSONObject packet = new JSONObject().put("type", "config")
                 .put("backend", config.getString("backend", ""))
                 .put("room", config.getString("room", ""))
-                .put("token", config.getString("token", ""));
+                .put("token", config.getString("token", ""))
+                .put("voiceId", config.getString("voiceId", ""));
             if (replies != null) replies.postMessage(packet.toString());
         } catch (Exception ignored) {}
     }

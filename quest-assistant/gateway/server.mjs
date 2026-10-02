@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { chat, providerStatus } from "./providers.mjs";
-import { speechRequest, transcriptionRequest, voiceStatus } from "./voice.mjs";
+import { speechRequest, transcriptionRequest, voiceStatus, listVoices } from "./voice.mjs";
 const PUBLIC = fileURLToPath(new URL("./public/", import.meta.url));
 const STATIC = new Set(["/index.html", "/app.mjs", "/style.css", "/protocol.mjs",
   "/vendor/leaflet.js", "/vendor/leaflet.css", "/vendor/leaflet-LICENSE.txt"]);
@@ -59,14 +59,16 @@ export function createHandler(env = process.env, fetcher = fetch) {
       if (path === "/api/status" && req.method === "GET") return json(res, 200, {
         providers: providerStatus(env), ...voiceStatus(env),
       });
-      if (req.method !== "POST") return json(res, 405, { error: "Method not allowed." });
-      if (!["/api/chat", "/api/transcribe", "/api/speech"].includes(path))
+      const voiceList = path === "/api/voices" && req.method === "GET";
+      if (req.method !== "POST" && !voiceList) return json(res, 405, { error: "Method not allowed." });
+      if (!voiceList && !["/api/chat", "/api/transcribe", "/api/speech"].includes(path))
         return json(res, 404, { error: "Not found." });
       const minute = Math.floor(Date.now() / 60000);
       const count = uses.get(minute) || 0;
       for (const key of uses.keys()) if (key !== minute) uses.delete(key);
       if (count >= 12) return json(res, 429, { error: "Request limit reached. Try again in a minute." });
       uses.set(minute, count + 1);
+      if (voiceList) return json(res, 200, await listVoices(env, fetcher, new URL(req.url, "http://localhost").searchParams.get("cursor") || ""));
       if (path === "/api/chat") {
         const input = JSON.parse((await readBody(req, 64000)).toString("utf8"));
         return json(res, 200, await chat(input, env, fetcher));
@@ -77,7 +79,7 @@ export function createHandler(env = process.env, fetcher = fetch) {
         request = transcriptionRequest(await readBody(req, 8 * 1024 * 1024), mime, env);
       } else {
         const input = JSON.parse((await readBody(req, 20000)).toString("utf8"));
-        request = speechRequest(input.text, env);
+        request = speechRequest(input.text, env, input.voiceId);
       }
       const upstream = await fetcher(request.url, {
         method: "POST", headers: request.headers, body: request.body,
@@ -94,7 +96,7 @@ export function createHandler(env = process.env, fetcher = fetch) {
       res.end(bytes);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Assistant request failed.";
-      const safe = /too large|prompt|Unknown|not configured|returned HTTP|invalid|Invalid|Unsupported|Unknown|Workspace|numbered|layer|location|usable|plan|Speech text|Empty audio/.test(message)
+      const safe = /too large|prompt|Unknown|not configured|returned HTTP|invalid|Invalid|Unsupported|Unknown|Workspace|numbered|layer|location|usable|plan|Speech text|Empty audio|Voice selection/.test(message)
         ? message : "Request failed. Check the backend connection and provider settings.";
       json(res, message.includes("too large") ? 413 : 400, { error: safe });
     }
