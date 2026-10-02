@@ -23,7 +23,12 @@ The background map uses OpenStreetMap tiles when internet is available.
 
 ## Backend
 
-`gateway/` is a standalone Node 22 service. Its provider calls use ordinary HTTPS APIs.
+The gateway is also mounted in this situation-room app at `/api/assistant`.
+After deploying this branch and setting its runtime secrets, use
+`https://your-situation-room.example/api/assistant` as the companion backend URL.
+This lets the APK use the existing app's server environment without a second hosting project.
+
+`gateway/` can alternatively run as a standalone Node 22 service. Its provider calls use ordinary HTTPS APIs.
 It also includes a Vercel adapter; set the Vercel project root to `quest-assistant/gateway`.
 A long-running Node deployment needs an HTTPS reverse proxy. The application intentionally
 rejects HTTP backend URLs in the headset.

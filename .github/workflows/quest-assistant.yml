@@ -2,7 +2,7 @@ name: Quest Assistant APK
 on:
   push:
     branches: ['codex/quest-assistant-prototype']
-    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', '.github/workflows/quest-assistant.yml']
+    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', 'src/routes/api/assistant/**', '.github/workflows/quest-assistant.yml']
   pull_request:
     paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', '.github/workflows/quest-assistant.yml']
   workflow_dispatch:
@@ -42,6 +42,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
@@ -67,5 +70,5 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
       - run: npm run build
+      - run: npm run typecheck
