@@ -1,0 +1,21 @@
+{
+  "name": "quest-assistant-gateway",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "leaflet": "1.9.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.51.1"
+  }
+}

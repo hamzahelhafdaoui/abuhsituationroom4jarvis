@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#081218">
+<title>Quest Assistant · Situation Room</title>
+<link rel="stylesheet" href="./vendor/leaflet.css"><link rel="stylesheet" href="./style.css">
+<script defer src="./vendor/leaflet.js"></script><script type="module" src="./app.mjs"></script>
+</head>
+<body>
+<header>
+  <div class="identity"><span class="mark" aria-hidden="true">Q</span><div><strong>QUEST ASSISTANT</strong><small>PERSONAL SITUATION ROOM / PROTOTYPE 01</small></div></div>
+  <div class="header-controls"><label for="provider" class="sr-only">AI provider</label>
+    <select id="provider"><option value="demo">Demo controls</option><option value="openai">ChatGPT / OpenAI</option><option value="grok">Grok / xAI</option><option value="gemini">Gemini / Google</option></select>
+    <button id="settings-button" class="quiet">Connect</button>
+  </div>
+</header>
+<nav aria-label="Workspace"><button data-tab="situation" aria-pressed="true">Situation room</button><button data-tab="studio">Build studio</button><button data-tab="aid">Aid notes</button><span id="connection">Demo · no backend connected</span></nav>
+<main>
+  <section class="canvas-panel" aria-label="Working canvas">
+    <div class="canvas-heading"><div><small>WORKING CANVAS</small><h1 id="location">Sudan overview</h1></div><span id="mode" class="badge">SYNTHETIC DEMO</span></div>
+    <div id="map-wrap"><div id="map" aria-label="Interactive map"></div><iframe id="room" title="Connected situation room" hidden></iframe>
+      <div class="map-label" id="map-note">Synthetic demonstration markers · not current intelligence</div>
+    </div>
+    <div id="studio" class="workbench" hidden><small>BUILD STUDIO</small><h2>Think through your next change.</h2><p>The assistant can explain code and draft a patch. Repository editing and deployment are not connected in this prototype.</p><label for="code">Code or app idea</label><textarea id="code" placeholder="Paste the component or describe the bug…"></textarea><button id="ask-code">Ask about this code</button></div>
+    <div id="aid" class="workbench" hidden><small>AID NETWORK</small><h2>Turn notes into a useful brief.</h2><p>Notes stay in this workspace session. Document search is not connected yet.</p><label for="notes">Project notes</label><textarea id="notes" placeholder="Needs, sources, questions, next steps…"></textarea><button id="ask-notes">Draft a brief from these notes</button></div>
+    <div class="canvas-footer"><span id="coords">15.500 N / 30.200 E</span><div><button id="firms" aria-pressed="false">FIRMS detections</button><button id="thermal" aria-pressed="false">Thermal overlay</button></div></div>
+  </section>
+  <aside class="intel-panel">
+    <div class="panel-heading"><div><small>RECORDS & EVIDENCE</small><h2>Today’s dated records</h2></div><button id="read-flags" class="quiet">Read five</button></div>
+    <p class="subtle">Africa/Khartoum · sorted by source record timestamp. The time first flagged is not supplied.</p>
+    <ol id="flags"><li class="empty">Say “read today’s five latest records” to create a numbered list.</li></ol>
+    <section id="evidence" hidden><small>SELECTED EVIDENCE</small><h3 id="evidence-title"></h3><p id="evidence-body"></p><p id="evidence-meta" class="subtle"></p><a id="evidence-link" target="_blank" rel="noopener noreferrer" hidden>Open source</a></section>
+    <details id="diagram-panel"><summary>Editable evidence diagram</summary><p class="subtle">Groups source records. Lines do not imply causation.</p><textarea id="diagram" aria-label="Mermaid diagram source" placeholder="Ask “make an evidence diagram”…"></textarea><button id="export-diagram">Export diagram</button></details>
+  </aside>
+</main>
+<section class="assistant-panel" aria-label="Assistant">
+  <div class="assistant-heading"><span class="orb" aria-hidden="true"></span><strong>ASSISTANT</strong><span id="activity" role="status">Ready</span><label class="voice-toggle"><input id="voice" type="checkbox">Speak replies</label><button id="stop" class="quiet">Stop</button></div>
+  <div id="conversation" aria-live="polite"><p class="assistant-message">Your workspace is ready. Try “open Sudan, zoom to Nyala, and read today’s five latest records.” Demo controls use synthetic data; a connected provider enables conversation.</p></div>
+  <div class="suggestions"><button data-prompt="Zoom to Nyala">Nyala</button><button data-prompt="Read today's five latest records">Read five</button><button data-prompt="Zoom to number 3 with FIRMS">Item 3 + FIRMS</button><button data-prompt="Make an evidence diagram">Diagram</button></div>
+  <form id="command-form"><label class="sr-only" for="command">Command</label><input id="command" maxlength="4000" placeholder="Ask, navigate, investigate…" autocomplete="off"><button id="mic" type="button" aria-label="Start microphone recording">Mic</button><button id="send" type="submit">Send</button></form>
+  <p class="subtle disclosure">Spoken replies use an AI-generated voice or an available device voice. No exact film voice is included.</p>
+</section>
+<dialog id="settings">
+<form id="settings-form"><small>CONNECTION SETTINGS</small><h2>Connect your tools</h2>
+<p>Provider keys belong on your backend. This screen only takes the backend access token.</p>
+<label for="backend-url">Assistant backend URL</label><input id="backend-url" type="url" placeholder="https://your-assistant.example">
+<label for="access-token">Backend access token</label><input id="access-token" type="password" autocomplete="off" placeholder="Your backend token">
+<label for="room-url">Situation room URL</label><input id="room-url" type="url" placeholder="https://your-situation-room.example">
+<p class="subtle">The situation room must include the companion bridge and allow this app’s exact origin. Configuration is kept for this browser session.</p>
+<div class="dialog-actions"><button type="button" id="close-settings" class="quiet">Cancel</button><button type="submit">Save connection</button></div>
+</form></dialog>
+</body></html>

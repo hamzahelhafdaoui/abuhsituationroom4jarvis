@@ -1,0 +1,71 @@
+name: Quest Assistant APK
+on:
+  push:
+    branches: ['codex/quest-assistant-prototype']
+    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', '.github/workflows/quest-assistant.yml']
+  pull_request:
+    paths: ['quest-assistant/**', 'src/components/quest-assistant-bridge.tsx', 'src/components/workspace.tsx', '.github/workflows/quest-assistant.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  companion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install companion dependencies
+        working-directory: quest-assistant/gateway
+        run: npm install --no-audit --no-fund
+      - name: Validate gateway and tool protocol
+        working-directory: quest-assistant/gateway
+        run: npm test
+      - name: Bundle trusted local assets
+        working-directory: quest-assistant/gateway
+        run: npm run build
+      - name: Install browser for HUD checks
+        working-directory: quest-assistant/gateway
+        run: npx playwright install --with-deps chromium
+      - name: Exercise desktop and mobile HUD
+        working-directory: quest-assistant/gateway
+        run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quest-hud-checks
+          path: quest-assistant/gateway/test-results
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Copy HUD into APK
+        run: |
+          mkdir -p quest-assistant/android/app/src/main/assets
+          cp -R quest-assistant/gateway/public/. quest-assistant/android/app/src/main/assets/
+      - name: Build debug APK
+        working-directory: quest-assistant/android
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quest-assistant-debug-apk
+          path: quest-assistant/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+  situation-room:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build

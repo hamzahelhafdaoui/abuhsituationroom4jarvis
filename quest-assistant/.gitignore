@@ -1,0 +1,8 @@
+gateway/node_modules/
+gateway/public/vendor/
+gateway/test-results/
+gateway/playwright-report/
+android/.gradle/
+android/local.properties
+android/app/build/
+android/app/src/main/assets/
